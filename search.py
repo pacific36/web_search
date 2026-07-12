@@ -2767,6 +2767,8 @@ def _resolve_sogou_link(url: str) -> str:
             return target
     return url
 
+_zhihu_captcha_cooldown_until = 0.0
+
 def search_zhihu(query: str, limit: int = 10) -> Tuple[List[Dict], Optional[str]]:
     """Zhihu coverage via Sogou's ``insite=zhihu.com`` vertical.
 
@@ -2775,6 +2777,9 @@ def search_zhihu(query: str, limit: int = 10) -> Tuple[List[Dict], Optional[str]
     vertical is the least hostile path and also spreads browser channels
     across four distinct hosts.
     """
+    global _zhihu_captcha_cooldown_until
+    if _time.time() < _zhihu_captcha_cooldown_until:
+        return [], "Zhihu (Sogou) skipped: CAPTCHA cooldown from earlier this session"
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -2800,6 +2805,7 @@ def search_zhihu(query: str, limit: int = 10) -> Tuple[List[Dict], Optional[str]
                 url = ("https://www.sogou.com/sogou?insite=zhihu.com&query="
                        + urllib.parse.quote(query))
                 try:
+                    page.wait_for_timeout(random.randint(400, 1200))
                     response = page.goto(url, timeout=30000, wait_until="domcontentloaded")
                     try:
                         page.wait_for_selector(".results .vrwrap, .results .rb", timeout=5000)
@@ -2858,6 +2864,9 @@ def search_zhihu(query: str, limit: int = 10) -> Tuple[List[Dict], Optional[str]
         last_error = last_error or "Zhihu (Sogou) returned 0 results"
         if used_fp is not None:
             _cooldown_fingerprint(used_fp, "sogou", base_seconds=20)
+    if last_error and "CAPTCHA" in last_error:
+        # Sogou blocks at the IP level; retrying every round just burns time.
+        _zhihu_captcha_cooldown_until = _time.time() + 600
     return [], last_error or "Zhihu (Sogou) returned 0 results"
 
 def search_csdn(query: str, limit: int = 10) -> Tuple[List[Dict], Optional[str]]:
@@ -3105,9 +3114,13 @@ def _effective_channel_query(channel: str, query: str,
     if alt:
         return alt
     if affinity == "en" and _CJK_CHAR_PATTERN.search(query):
-        latin = " ".join(_LATIN_TOKEN_PATTERN.findall(query))
-        if len(latin) >= 4:
-            return latin
+        tokens = _LATIN_TOKEN_PATTERN.findall(query)
+        # Digit-only leftovers like a bare year would query English indexes
+        # with pure noise; require at least one alphabetic token.
+        if any(re.search(r"[A-Za-z]", token) for token in tokens):
+            latin = " ".join(tokens)
+            if len(latin) >= 4:
+                return latin
     return query
 
 def search_all_engines_extended(query: str, limit: int = 15, vendor: Optional[str] = None,
