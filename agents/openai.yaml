@@ -1,0 +1,4 @@
+interface:
+  display_name: "Web Search"
+  short_description: "Aggregate broad, current web evidence"
+  default_prompt: "Use $web-search to collect, verify, and synthesize comprehensive multi-channel web evidence for my query."
