@@ -1236,6 +1236,52 @@ class AllChannelOrchestrationRegressionTests(unittest.TestCase):
         for provider in providers.values():
             provider.assert_called_once()
 
+    def test_language_affine_channels_receive_routed_queries(self) -> None:
+        providers = {}
+        for attribute, channel in self.CHANNEL_FUNCTIONS.items():
+            providers[attribute] = mock.Mock(name=attribute, return_value=([], None))
+        cache = _FakeCache()
+        alt_queries = {"en": "Rust tokio runtime tuning", "zh": "Rust tokio 运行时 调优"}
+
+        with mock.patch.multiple(search, **providers), \
+                mock.patch.object(search, "_get_persistent_cache", return_value=cache), \
+                mock.patch.object(search, "_force_fresh", True):
+            search.search_all_engines_extended(
+                "Rust tokio 异步运行时 性能调优", limit=3, alt_queries=alt_queries
+            )
+
+        self.assertEqual(
+            providers["playwright_google_search"].call_args[0][0],
+            "Rust tokio 异步运行时 性能调优",
+        )
+        self.assertEqual(
+            providers["search_stackoverflow"].call_args[0][0],
+            "Rust tokio runtime tuning",
+        )
+        self.assertEqual(
+            providers["search_zhihu"].call_args[0][0],
+            "Rust tokio 运行时 调优",
+        )
+
+    def test_english_channels_fall_back_to_latin_tokens_without_translation(self) -> None:
+        self.assertEqual(
+            search._effective_channel_query("StackOverflow", "Rust tokio 异步运行时 性能调优"),
+            "Rust tokio",
+        )
+        self.assertEqual(
+            search._effective_channel_query("Google", "Rust tokio 异步运行时 性能调优"),
+            "Rust tokio 异步运行时 性能调优",
+        )
+        self.assertEqual(
+            search._effective_channel_query("Baidu", "Rust tokio 异步运行时 性能调优"),
+            "Rust tokio 异步运行时 性能调优",
+        )
+        # A pure-CJK query has no usable Latin subset and stays unchanged.
+        self.assertEqual(
+            search._effective_channel_query("StackOverflow", "机械键盘 推荐"),
+            "机械键盘 推荐",
+        )
+
     def test_credential_gated_channels_join_when_keys_present(self) -> None:
         providers = {}
         all_functions = dict(self.CHANNEL_FUNCTIONS)
@@ -1394,8 +1440,8 @@ class SmartSearchConcurrencyRegressionTests(unittest.TestCase):
         errors = []
 
         def isolated_impl(query, limit=15, max_iterations=3, fresh=False,
-                          review_queries=None):
-            del limit, max_iterations, review_queries
+                          review_queries=None, alt_queries=None):
+            del limit, max_iterations, review_queries, alt_queries
             nonlocal active_sessions, maximum_active_sessions
             search._force_fresh = bool(fresh)
             with state_lock:
@@ -1471,7 +1517,7 @@ class ModelReviewRegressionTests(unittest.TestCase):
             "independent contradiction evidence",
         ]
 
-        def aggregate(query, limit, vendor):
+        def aggregate(query, limit, vendor, alt_queries=None):
             return self._round_result(query), {"Google": "✅ 1 results [live]"}
 
         all_channel_aggregator = mock.Mock(side_effect=aggregate)
@@ -1511,7 +1557,7 @@ class ModelReviewRegressionTests(unittest.TestCase):
         self.assertEqual(review_queries, result["model_review"]["requested_queries"])
         self.assertEqual(review_queries, result["model_review"]["applied_queries"])
         self.assertEqual(
-            [mock.call(query, 3, None) for query in expected_queries],
+            [mock.call(query, 3, None, alt_queries=None) for query in expected_queries],
             all_channel_aggregator.call_args_list,
         )
         self.assertNotIn("automatic fallback expansion", result["queries_tried"])
@@ -1619,6 +1665,7 @@ class ModelReviewRegressionTests(unittest.TestCase):
             {
                 "query",
                 "detected_vendor",
+                "alt_queries",
                 "sufficient",
                 "queries_tried",
                 "model_review",

@@ -25,6 +25,17 @@ venv/Scripts/python.exe search.py "your query" --max-iter 3 --summary --review-q
 
 `--limit` is the per-channel target. `--fresh` forces live refresh while retaining stale data only as a failure supplement. `--plan-only` prints query expansion directions without network access. `--summary` emits a compact `review_packet`; repeated `--review-query` values inject caller-selected directions into subsequent all-channel rounds.
 
+## Cross-language routing
+
+English-indexed sources cannot match a CJK-only query and Chinese community sources rank CJK text far better, so language-affine channels can search a translated variant of the base query:
+
+```bash
+venv/Scripts/python.exe search.py "SQLite WAL 模式 并发写入 性能" \
+  --query-en "SQLite WAL mode concurrent write performance"
+```
+
+English-indexed channels (Stack Overflow, Hacker News, arXiv, Crossref, OpenAlex, GitHub) then run the `--query-en` text; Chinese community channels (Baidu, Zhihu, CSDN, V2EX, Juejin) run `--query-zh` when supplied. Google/Bing always receive the original query. When no translation is given, English channels fall back to the query's Latin tokens (`SQLite WAL 模式 并发` reaches them as `SQLite WAL`), so mixed queries still get partial reach. The `smart_search()` / `search_all_engines_extended()` APIs accept the same variants via an `alt_queries={"en": ..., "zh": ...}` argument.
+
 ## Review loop
 
 Run one summarized round first, inspect coverage, freshness, source diversity, corroboration, contradictions, resources, and failures, then select up to three targeted queries. Rerun with the accumulated `--review-query` arguments; cached earlier rounds make this inexpensive while every new direction is still broadcast to all channels. Stop when the evidence is sufficient or a pass produces no material information gain.
