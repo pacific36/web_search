@@ -1,0 +1,12 @@
+venv/
+.venv/
+browsers/
+cache/
+__pycache__/
+*.pyc
+_backup_pre_hardening/
+_backup_pre_speedup/
+.DS_Store
+*.egg-info/
+dist/
+build/
