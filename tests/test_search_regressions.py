@@ -1281,6 +1281,11 @@ class AllChannelOrchestrationRegressionTests(unittest.TestCase):
             search._effective_channel_query("StackOverflow", "机械键盘 推荐"),
             "机械键盘 推荐",
         )
+        # Digit-only leftovers (e.g. a bare year) must not become the query.
+        self.assertEqual(
+            search._effective_channel_query("StackOverflow", "客制化键盘 轴体 对比 2026"),
+            "客制化键盘 轴体 对比 2026",
+        )
 
     def test_credential_gated_channels_join_when_keys_present(self) -> None:
         providers = {}
