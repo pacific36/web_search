@@ -21,6 +21,7 @@ description: Gather and synthesize broad, current internet evidence through Goog
 ## Expand coverage
 
 - Broadcast the original query to all three general search engines before evaluating sufficiency.
+- For a cross-language query, pass `--query-en "<English>"` and/or `--query-zh "<中文>"`: English-indexed channels (StackOverflow/HN/arXiv/Crossref/OpenAlex/GitHub) then search the English text and Chinese community channels (Baidu/Zhihu/CSDN/V2EX/Juejin) the Chinese text, while Google/Bing always get the original. Without a translation, English channels fall back to the query's Latin tokens, so a query like `SQLite WAL 模式 并发` still reaches them as `SQLite WAL`. Provide translations whenever the topic has strong coverage on the other language's sites.
 - Generate only high-value variants from exact phrases, aliases, translations, versions, dates, entities, `site:` constraints, and `filetype:` constraints.
 - Probe applicable academic, code, community, and official sources alongside general search.
 - Follow relevant canonical links, citations, PDFs, attachments, repositories, releases, documentation, feeds, and bounded same-site links.

@@ -1792,7 +1792,8 @@ def generate_expansion_queries(query: str, vendor: Optional[str],
 
 def _smart_search_impl(query: str, limit: int = 15, max_iterations: int = 3,
                        fresh: bool = False,
-                       review_queries: Optional[List[str]] = None) -> Dict[str, Any]:
+                       review_queries: Optional[List[str]] = None,
+                       alt_queries: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     global _force_fresh
     _force_fresh = bool(fresh or os.environ.get("WEB_SEARCH_FRESH") == "1")
     with _filter_stats_lock:
@@ -1800,6 +1801,7 @@ def _smart_search_impl(query: str, limit: int = 15, max_iterations: int = 3,
     vendor = detect_vendor(query)
     result = {
         "query": query, "detected_vendor": vendor,
+        "alt_queries": dict(alt_queries or {}),
         "official_open_source": [], "official_commercial_api": [],
         "official_blog_docs": [], "community_results": [],
         "academic_results": [],
@@ -1925,7 +1927,12 @@ def _smart_search_impl(query: str, limit: int = 15, max_iterations: int = 3,
             all_queries_tried.add(current_query)
             result["queries_tried"].append(current_query)
             
-            merged_results, engine_status = search_all_engines_extended(current_query, limit, vendor)
+            # Translations describe the base query; expansion/review rounds
+            # arrive already written in the language of the gap they target.
+            merged_results, engine_status = search_all_engines_extended(
+                current_query, limit, vendor,
+                alt_queries=alt_queries if current_query == original_query else None,
+            )
             log_entry["engines"] = engine_status
             
             # Update global engine status
@@ -2288,7 +2295,8 @@ def _smart_search_impl(query: str, limit: int = 15, max_iterations: int = 3,
 
 def smart_search(query: str, limit: int = 15, max_iterations: int = 3,
                  fresh: bool = False,
-                 review_queries: Optional[List[str]] = None) -> Dict[str, Any]:
+                 review_queries: Optional[List[str]] = None,
+                 alt_queries: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Run one isolated search session; calls serialize while channels stay concurrent."""
     global _force_fresh
     with _smart_search_lock:
@@ -2296,7 +2304,7 @@ def smart_search(query: str, limit: int = 15, max_iterations: int = 3,
         try:
             return _smart_search_impl(
                 query, limit, max_iterations, fresh=fresh,
-                review_queries=review_queries,
+                review_queries=review_queries, alt_queries=alt_queries,
             )
         finally:
             _force_fresh = previous_fresh
@@ -2386,6 +2394,7 @@ def compact_search_output(result: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "query": result.get("query"),
         "detected_vendor": result.get("detected_vendor"),
+        "alt_queries": result.get("alt_queries", {}),
         "sufficient": result.get("sufficient"),
         "queries_tried": result.get("queries_tried", []),
         "model_review": result.get("model_review", {}),
@@ -3067,7 +3076,42 @@ def _run_channel_cached(name: str, func, query: str, limit: int,
     return [], error, "live"
 
 
-def search_all_engines_extended(query: str, limit: int = 15, vendor: Optional[str] = None) -> Tuple[List[Dict], Dict[str, str]]:
+# English-indexed sources cannot match CJK-only queries and Chinese community
+# sources rank CJK queries far better, so language-affine channels may swap in
+# a caller-supplied translation of the round query.  General engines
+# (Google/Bing) always receive the original query.
+_CHANNEL_LANGUAGE_AFFINITY = {
+    "Baidu": "zh", "Zhihu": "zh", "CSDN": "zh", "V2EX": "zh", "Juejin": "zh",
+    "StackOverflow": "en", "HackerNews": "en", "Reddit": "en",
+    "SemanticScholar": "en", "arXiv": "en", "Crossref": "en", "OpenAlex": "en",
+    "GitHub": "en",
+}
+
+_CJK_CHAR_PATTERN = re.compile(r"[㐀-䶿一-鿿]")
+_LATIN_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.+#-]*")
+
+def _effective_channel_query(channel: str, query: str,
+                             alt_queries: Optional[Dict[str, str]] = None) -> str:
+    """Pick the query variant a language-affine channel should run.
+
+    Falls back to the Latin tokens of a mixed CJK query for English-indexed
+    channels when no translation was supplied, so they are not queried with
+    text their index cannot contain.
+    """
+    affinity = _CHANNEL_LANGUAGE_AFFINITY.get(channel)
+    if not affinity:
+        return query
+    alt = str((alt_queries or {}).get(affinity) or "").strip()
+    if alt:
+        return alt
+    if affinity == "en" and _CJK_CHAR_PATTERN.search(query):
+        latin = " ".join(_LATIN_TOKEN_PATTERN.findall(query))
+        if len(latin) >= 4:
+            return latin
+    return query
+
+def search_all_engines_extended(query: str, limit: int = 15, vendor: Optional[str] = None,
+                                alt_queries: Optional[Dict[str, str]] = None) -> Tuple[List[Dict], Dict[str, str]]:
     """
     Search ALL engines (web + academic + code + community), merge results.
     Each engine is wrapped in try/except - failures are logged but never crash the search.
@@ -3105,15 +3149,25 @@ def search_all_engines_extended(query: str, limit: int = 15, vendor: Optional[st
     # Sogou).  Lightweight API channels run concurrently while those browser
     # searches are in progress.
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    routed_queries = {
+        name: _effective_channel_query(name, query, alt_queries)
+        for name, *_ in providers
+    }
+
+    def _status_suffix(name: str) -> str:
+        routed = routed_queries[name]
+        return f" (q: {routed[:60]!r})" if routed != query else ""
+
     api_providers = providers[_browser_channel_count:]
     with ThreadPoolExecutor(max_workers=min(8, len(api_providers))) as executor:
         futures = {
-            executor.submit(_run_channel_cached, name, func, query, provider_limit, resource_type): name
+            executor.submit(_run_channel_cached, name, func, routed_queries[name],
+                            provider_limit, resource_type): name
             for name, func, provider_limit, resource_type in api_providers
         }
         for name, func, provider_limit, resource_type in providers[:_browser_channel_count]:
             results, error, cache_state = _run_channel_cached(
-                name, func, query, provider_limit, resource_type
+                name, func, routed_queries[name], provider_limit, resource_type
             )
             channel_outputs[name] = results
             if error and results:
@@ -3121,7 +3175,7 @@ def search_all_engines_extended(query: str, limit: int = 15, vendor: Optional[st
             elif error:
                 engine_status[name] = f"❌ [{cache_state}] {error}"
             else:
-                engine_status[name] = f"✅ {len(results)} results [{cache_state}]"
+                engine_status[name] = f"✅ {len(results)} results [{cache_state}]{_status_suffix(name)}"
 
         for future in as_completed(futures):
             name = futures[future]
@@ -3135,7 +3189,7 @@ def search_all_engines_extended(query: str, limit: int = 15, vendor: Optional[st
             elif error:
                 engine_status[name] = f"❌ [{cache_state}] {error}"
             else:
-                engine_status[name] = f"✅ {len(results)} results [{cache_state}]"
+                engine_status[name] = f"✅ {len(results)} results [{cache_state}]{_status_suffix(name)}"
 
     all_raw = [item for name, *_ in providers for item in channel_outputs.get(name, [])]
     ordered_status = {name: engine_status[name] for name, *_ in providers if name in engine_status}
@@ -3146,10 +3200,14 @@ if __name__ == "__main__":
         sys.stdout.reconfigure(encoding="utf-8")
     usage = (
         "Usage: search.py <query> [--limit N] [--max-iter N] [--fresh] "
-        "[--plan-only] [--summary] [--review-query QUERY ...]\n\n"
+        "[--plan-only] [--summary] [--review-query QUERY ...] "
+        "[--query-en TEXT] [--query-zh TEXT]\n\n"
         "All enabled channels run for every query round. Repeat --review-query "
         "with targeted directions selected by a model review pass; --summary "
-        "emits a compact review packet while the default keeps the full evidence."
+        "emits a compact review packet while the default keeps the full evidence. "
+        "--query-en/--query-zh supply translations of the base query so "
+        "language-affine channels (StackOverflow/HN/arXiv/... vs "
+        "Baidu/Zhihu/CSDN/V2EX/Juejin) search in the language their index holds."
     )
     if len(sys.argv) < 2 or sys.argv[1] in {"-h", "--help"}:
         print(usage)
@@ -3161,6 +3219,7 @@ if __name__ == "__main__":
     plan_only = False
     summary_only = False
     review_queries: List[str] = []
+    alt_queries: Dict[str, str] = {}
     i = 2
     while i < len(sys.argv):
         if sys.argv[i] == "--limit" and i + 1 < len(sys.argv):
@@ -3169,6 +3228,10 @@ if __name__ == "__main__":
             max_iter = max(1, int(sys.argv[i + 1])); i += 2
         elif sys.argv[i] == "--review-query" and i + 1 < len(sys.argv):
             review_queries.append(sys.argv[i + 1]); i += 2
+        elif sys.argv[i] == "--query-en" and i + 1 < len(sys.argv):
+            alt_queries["en"] = sys.argv[i + 1]; i += 2
+        elif sys.argv[i] == "--query-zh" and i + 1 < len(sys.argv):
+            alt_queries["zh"] = sys.argv[i + 1]; i += 2
         elif sys.argv[i] == "--fresh":
             fresh = True; i += 1
         elif sys.argv[i] == "--plan-only":
@@ -3184,7 +3247,8 @@ if __name__ == "__main__":
                       "expansions": generate_expansion_queries(query, vendor)}
         else:
             output = smart_search(
-                query, limit, max_iter, fresh=fresh, review_queries=review_queries
+                query, limit, max_iter, fresh=fresh, review_queries=review_queries,
+                alt_queries=alt_queries or None,
             )
             if summary_only:
                 output = compact_search_output(output)
