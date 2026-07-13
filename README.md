@@ -64,6 +64,36 @@ The search code automatically discovers a Chromium executable under the project-
 
 To register the skill with an agent runtime, point it at `SKILL.md` (for example copy this directory, or symlink `SKILL.md` into the runtime's skills directory and keep the repo as the working directory).
 
+## MCP server (browser channels in sandboxed hosts)
+
+Agent runtimes whose command sandbox cannot launch Chromium (e.g. Codex's
+`exec_command`, where running `search.py` directly hangs at the first browser
+channel) can reach the full skill -- browser SERP channels included -- through
+the bundled stdio MCP server, `mcp_server.py`. MCP servers are started by the
+host as their own process, outside the per-command sandbox, so Playwright runs
+normally and no channel is skipped.
+
+It exposes one tool, `web_search` (arguments: `query`, `limit`, `max_iter`,
+`fresh`, `summary`, `query_en`, `query_zh`, `review_queries`), and shells out to
+`search.py`. Only the Python standard library is used, so the pinned venv is
+untouched.
+
+Register it with the host. For the Codex CLI, add to `~/.codex/config.toml`
+(use single-quoted TOML literals so Windows backslashes are not treated as
+escapes):
+
+```toml
+[mcp_servers.web_search]
+command = 'D:\tools\web_search\venv\Scripts\python.exe'
+args = ['D:\tools\web_search\mcp_server.py']
+# optional tuning / long searches:
+# env = { WEB_SEARCH_DEEP_WORKERS = "8", WEB_SEARCH_MCP_TIMEOUT = "600" }
+```
+
+After restarting the host, the `web_search` tool is auto-discovered via
+`tools/list` -- no per-query setup. If a host instead runs `search.py` directly
+inside a no-Chromium sandbox, use `WEB_SEARCH_SKIP_BROWSER=1` (API channels only).
+
 ## Stability and performance
 
 - Freshness-aware memory LRU + SQLite WAL cache
