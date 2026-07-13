@@ -904,8 +904,13 @@ def playwright_bing_search(query: str, limit: int = 20) -> Tuple[List[Dict], Opt
             _cooldown_fingerprint(used_fp, "bing", base_seconds=20)
     return [], last_error or "Bing returned 0 results"
 
+_baidu_captcha_cooldown_until = 0.0
+
 def playwright_baidu_search(query: str, limit: int = 20) -> Tuple[List[Dict], Optional[str]]:
     """Baidu search with CAPTCHA retry and fingerprint rotation."""
+    global _baidu_captcha_cooldown_until
+    if _time.time() < _baidu_captcha_cooldown_until:
+        return [], "Baidu skipped: CAPTCHA cooldown from earlier this session"
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -1001,6 +1006,12 @@ def playwright_baidu_search(query: str, limit: int = 20) -> Tuple[List[Dict], Op
         last_error = last_error or "Baidu returned 0 results"
         if used_fp is not None:
             _cooldown_fingerprint(used_fp, "baidu", base_seconds=20)
+    if last_error and "CAPTCHA" in last_error:
+        # Baidu blocks at the IP level; retrying every round just burns time and
+        # hammers a host that already flagged us.  Back off for the session --
+        # _run_channel_cached still serves stale Baidu results meanwhile, so
+        # coverage is preserved while the request footprint drops.
+        _baidu_captcha_cooldown_until = _time.time() + 600
     return [], last_error or "Baidu returned 0 results"
 
 # ============================================================
