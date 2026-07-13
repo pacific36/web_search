@@ -82,6 +82,7 @@ To register the skill with an agent runtime, point it at `SKILL.md` (for example
 Useful environment variables:
 
 - `WEB_SEARCH_CACHE_PATH`, `WEB_SEARCH_FRESH=1`
+- `WEB_SEARCH_SKIP_BROWSER=1` disables the browser SERP channels (Google/Bing/Baidu/Zhihu) and routes deep reads through plain HTTP + trafilatura, for sandboxes that cannot launch Chromium (e.g. Codex's `exec_command`). Only the API channels (arXiv/Crossref/OpenAlex/GitHub/Hacker News/CSDN/Stack Overflow/V2EX/Juejin) return live results; browser channels still serve any stale cache. JS-heavy pages (CSDN/Juejin/some Stack Overflow) may not extract without a browser.
 - `WEB_SEARCH_FINGERPRINTS_JSON`
 - `WEB_SEARCH_DEEP_PAGES_PER_ROUND`, `WEB_SEARCH_DEEP_ATTEMPTS_PER_ROUND`
 - `WEB_SEARCH_DEEP_WORKERS` (parallel deep reads, default 4), `WEB_SEARCH_CONTENT_FAILURE_TTL` (seconds, default 1800)

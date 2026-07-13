@@ -747,8 +747,18 @@ def _new_stealth_browser(p, fp_idx=None, engine: str = "general",
 # SEARCH ENGINES
 # ============================================================
 
+def _skip_browser() -> bool:
+    """True when WEB_SEARCH_SKIP_BROWSER is set: disable browser (Playwright/
+    Chromium) channels so the skill runs in sandboxes that cannot launch a
+    browser (e.g. Codex's exec_command).  Browser SERP channels then return
+    empty (stale cache is still served by _run_channel_cached) and deep reads
+    fall back to plain-HTTP extraction via _http_extract_content."""
+    return os.environ.get("WEB_SEARCH_SKIP_BROWSER", "").strip().lower() in {"1", "true", "yes", "on"}
+
 def playwright_google_search(query: str, limit: int = 20) -> Tuple[List[Dict], Optional[str]]:
     """Google search with CAPTCHA retry and fingerprint rotation."""
+    if _skip_browser():
+        return [], "Google skipped: WEB_SEARCH_SKIP_BROWSER set (browser channels disabled)"
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -830,6 +840,8 @@ def playwright_google_search(query: str, limit: int = 20) -> Tuple[List[Dict], O
 
 def playwright_bing_search(query: str, limit: int = 20) -> Tuple[List[Dict], Optional[str]]:
     """Bing search with CAPTCHA retry and fingerprint rotation."""
+    if _skip_browser():
+        return [], "Bing skipped: WEB_SEARCH_SKIP_BROWSER set (browser channels disabled)"
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -908,6 +920,8 @@ _baidu_captcha_cooldown_until = 0.0
 
 def playwright_baidu_search(query: str, limit: int = 20) -> Tuple[List[Dict], Optional[str]]:
     """Baidu search with CAPTCHA retry and fingerprint rotation."""
+    if _skip_browser():
+        return [], "Baidu skipped: WEB_SEARCH_SKIP_BROWSER set (browser channels disabled)"
     global _baidu_captcha_cooldown_until
     if _time.time() < _baidu_captcha_cooldown_until:
         return [], "Baidu skipped: CAPTCHA cooldown from earlier this session"
@@ -1197,11 +1211,121 @@ def _deep_read_serialized(url: str, max_chars: int, query: str) -> Optional[str]
     with lock:
         return playwright_extract_content(url, max_chars=max_chars, query=query)
 
+def _http_extract_content(url: str, max_chars: int = 50000, query: str = "") -> Optional[str]:
+    """Browser-free deep read for WEB_SEARCH_SKIP_BROWSER mode: fetch over plain
+    HTTP (SSRF-guarded via _guarded_urlopen) and extract with trafilatura,
+    mirroring the Playwright path's extraction and cache write.  PDFs reuse the
+    existing HTTP PDF extractor.  On any fetch/extract failure it returns stale
+    cache or None WITHOUT caching a failure, so a sandbox run never suppresses a
+    later browser-capable run that shares the same cache."""
+    url = resolve_bing_redirect(url)
+    if not url.startswith("http") or not _is_safe_fetch_url(url, resolve_dns=False):
+        return None
+    persistent = _get_persistent_cache()
+    content_key = make_cache_key(normalize_url(url))
+    is_pdf_url = urllib.parse.urlsplit(url).path.lower().endswith(".pdf")
+    policy = classify_cache_policy(query, "pdf" if is_pdf_url else "auto", url=url)
+    hit = persistent.get("content", content_key)
+    stale_text = None
+    if hit.hit and not hit.is_failure:
+        val = hit.value
+        if isinstance(val, dict):
+            stale_text = val.get("content") or None
+        elif isinstance(val, str):
+            stale_text = val or None
+        if stale_text and hit.fresh and not _force_fresh:
+            if isinstance(val, dict):
+                meta = dict(val); meta.pop("content", None)
+                meta["cache_state"] = hit.state
+                _extraction_metadata[normalize_url(url)] = meta
+            return stale_text[:max_chars]
+    if is_pdf_url:
+        return _extract_pdf_content(url, max_chars, query, persistent, content_key, stale_text)
+    try:
+        ua = str(_FINGERPRINTS[0]["ua"]).replace("{major}", "126")
+        request = urllib.request.Request(url, headers={
+            "User-Agent": ua,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        })
+        max_bytes = int(os.environ.get("WEB_SEARCH_MAX_RESOURCE_BYTES", str(25 * 1024 * 1024)))
+        with _guarded_urlopen(request, timeout=30) as response:
+            ctype = (response.headers.get("Content-Type") or "").lower()
+            final_url = response.geturl()
+            raw = response.read(max_bytes + 1)[:max_bytes]
+            headers = {k.lower(): v for k, v in response.headers.items()}
+    except Exception:
+        return stale_text[:max_chars] if stale_text else None
+    if "application/pdf" in ctype or raw[:5] == b"%PDF-":
+        return _extract_pdf_content(url, max_chars, query, persistent, content_key, stale_text)
+    charset = "utf-8"
+    m = re.search(r"charset=([\w.-]+)", ctype)
+    if m:
+        charset = m.group(1)
+    try:
+        html = raw.decode(charset, errors="replace")
+    except (LookupError, TypeError):
+        html = raw.decode("utf-8", errors="replace")
+    if not html or len(html) < 200:
+        return stale_text[:max_chars] if stale_text else None
+    result = None
+    try:
+        import trafilatura
+        extracted = trafilatura.extract(
+            html, include_tables=True, include_links=False, include_images=False,
+            no_fallback=False, favor_precision=False, favor_recall=True, target_language=None,
+        )
+        if extracted and len(extracted.strip()) > 100:
+            lines = [ln.strip() for ln in extracted.split("\n")
+                     if ln.strip() and len(ln.strip()) >= 10 and not is_ad_text(ln.strip())]
+            result = "\n".join(lines)
+    except Exception:
+        pass
+    if not result or len(result) < 100:
+        return stale_text[:max_chars] if stale_text else None
+    try:
+        links = [
+            {"url": link.url, "kind": link.kind, "anchor": link.anchor,
+             "rel": list(link.rel), "mime_type": link.mime_type}
+            for link in extract_html_links(html, final_url)
+        ]
+    except Exception:
+        links = []
+    canonical_link = next((l["url"] for l in links if l["kind"] == "canonical"), "")
+    full_chars = len(result)
+    hard_store_limit = max(max_chars, int(os.environ.get("WEB_SEARCH_MAX_STORED_CONTENT_CHARS", "500000")))
+    stored_content = result[:hard_store_limit]
+    document = {
+        "content": stored_content,
+        "requested_url": url,
+        "final_url": canonicalize_url(final_url) or final_url,
+        "canonical_url": canonical_link or canonicalize_url(final_url),
+        "content_type": headers.get("content-type", "text/html"),
+        "etag": headers.get("etag"),
+        "last_modified": headers.get("last-modified"),
+        "content_chars": full_chars,
+        "content_hash": hashlib.sha256(result.encode("utf-8", errors="ignore")).hexdigest(),
+        "truncated": full_chars > max_chars,
+        "links": links,
+        "cache_state": "live",
+        "discovered_at": _utc_now_iso(),
+        "validated_at": _utc_now_iso(),
+    }
+    meta = dict(document); meta.pop("content", None)
+    _extraction_metadata[normalize_url(url)] = meta
+    persistent.set("content", content_key, document,
+                   ttl=policy.success_ttl, stale_ttl=policy.stale_ttl,
+                   etag=document.get("etag"), last_modified=document.get("last_modified"),
+                   content_hash=document["content_hash"])
+    return stored_content[:max_chars]
+
 def playwright_extract_content(url: str, max_chars: int = 50000,
                                query: str = "") -> Optional[str]:
     """Extract main content from a URL using Playwright + trafilatura (Readability algorithm).
     Falls back to manual selector-based extraction if trafilatura fails.
     Results are cached to avoid redundant fetches."""
+    if _skip_browser():
+        return _http_extract_content(url, max_chars=max_chars, query=query)
     url = resolve_bing_redirect(url)
     if not url.startswith("http") or not _is_safe_fetch_url(url, resolve_dns=False):
         return None
@@ -2788,6 +2912,8 @@ def search_zhihu(query: str, limit: int = 10) -> Tuple[List[Dict], Optional[str]
     vertical is the least hostile path and also spreads browser channels
     across four distinct hosts.
     """
+    if _skip_browser():
+        return [], "Zhihu skipped: WEB_SEARCH_SKIP_BROWSER set (browser channels disabled)"
     global _zhihu_captcha_cooldown_until
     if _time.time() < _zhihu_captcha_cooldown_until:
         return [], "Zhihu (Sogou) skipped: CAPTCHA cooldown from earlier this session"
