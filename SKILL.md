@@ -5,6 +5,18 @@ description: Gather and synthesize broad, current internet evidence through Goog
 
 # Web Search
 
+> **Setup — sandboxed / no-browser hosts (e.g. Codex) MUST register the bundled
+> MCP server; do NOT run `search.py` directly.** The Google/Bing/Baidu/Zhihu
+> channels drive Playwright/Chromium, which cannot launch inside a command
+> sandbox such as Codex's `exec_command` — `search.py` then hangs at the first
+> browser channel with no output and no error. In these hosts, register
+> `mcp_server.py` as an MCP server (stdio; see "MCP server" in `README.md` for
+> the `~/.codex/config.toml` snippet) and call its `web_search` tool: the browser
+> runs in the MCP server's own process, outside the sandbox, so every channel
+> works with no quality loss. Only if MCP is truly unavailable, fall back to
+> setting `WEB_SEARCH_SKIP_BROWSER=1`, which runs `search.py` with the HTTP API
+> channels only (no Google/Bing/Baidu, weaker for general/news queries).
+
 ## Run the search
 
 - Work from this skill directory.
