@@ -2529,6 +2529,7 @@ def build_model_review_packet(result: Dict[str, Any], top_k: int = 12) -> Dict[s
 
 def compact_search_output(result: Dict[str, Any]) -> Dict[str, Any]:
     """Return the small view intended for intermediate model review rounds."""
+    cache_stats = result.get("cache") or {}
     return {
         "query": result.get("query"),
         "detected_vendor": result.get("detected_vendor"),
@@ -2539,6 +2540,11 @@ def compact_search_output(result: Dict[str, Any]) -> Dict[str, Any]:
         "coverage": result.get("coverage", {}),
         "channels": result.get("channels", {}),
         "filtered_summary": result.get("filtered_summary", {}),
+        # Just degraded/last_error, not the full result["cache"] stats blob: if
+        # SQLite lock contention forced a fallback to an in-memory cache for
+        # this process, --summary output would otherwise give no indication.
+        "cache": {"degraded": cache_stats.get("degraded", False),
+                  "last_error": cache_stats.get("last_error")},
         "review_packet": result.get("review_packet", {}),
         "resources": (result.get("resources") or [])[:20],
         "search_log": result.get("search_log", []),
@@ -3374,25 +3380,35 @@ if __name__ == "__main__":
     review_queries: List[str] = []
     alt_queries: Dict[str, str] = {}
     i = 2
+    # Value-bearing flags need a following token; boolean flags don't consume one.
+    # Anything else (typo'd flag, or a value-flag with no value left) is a hard
+    # error instead of being silently skipped -- a swallowed --fresh/--limit typo
+    # used to run "successfully" against the wrong settings with zero warning.
+    known_value_flags = {"--limit", "--max-iter", "--review-query", "--query-en", "--query-zh"}
     while i < len(sys.argv):
-        if sys.argv[i] == "--limit" and i + 1 < len(sys.argv):
+        token = sys.argv[i]
+        if token in known_value_flags and i + 1 >= len(sys.argv):
+            print(f"Error: {token} requires a value.\n\n{usage}", file=sys.stderr)
+            sys.exit(1)
+        if token == "--limit":
             limit = max(1, int(sys.argv[i + 1])); i += 2
-        elif sys.argv[i] == "--max-iter" and i + 1 < len(sys.argv):
+        elif token == "--max-iter":
             max_iter = max(1, int(sys.argv[i + 1])); i += 2
-        elif sys.argv[i] == "--review-query" and i + 1 < len(sys.argv):
+        elif token == "--review-query":
             review_queries.append(sys.argv[i + 1]); i += 2
-        elif sys.argv[i] == "--query-en" and i + 1 < len(sys.argv):
+        elif token == "--query-en":
             alt_queries["en"] = sys.argv[i + 1]; i += 2
-        elif sys.argv[i] == "--query-zh" and i + 1 < len(sys.argv):
+        elif token == "--query-zh":
             alt_queries["zh"] = sys.argv[i + 1]; i += 2
-        elif sys.argv[i] == "--fresh":
+        elif token == "--fresh":
             fresh = True; i += 1
-        elif sys.argv[i] == "--plan-only":
+        elif token == "--plan-only":
             plan_only = True; i += 1
-        elif sys.argv[i] == "--summary":
+        elif token == "--summary":
             summary_only = True; i += 1
         else:
-            i += 1
+            print(f"Error: unrecognized argument {token!r}.\n\n{usage}", file=sys.stderr)
+            sys.exit(1)
     try:
         if plan_only:
             vendor = detect_vendor(query)

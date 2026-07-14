@@ -150,5 +150,10 @@ Useful environment variables:
 - `SEMANTIC_SCHOLAR_API_KEY` / `REDDIT_ACCESS_TOKEN` enable those channels; `OPENALEX_API_KEY`, `GITHUB_TOKEN`, `STACKEXCHANGE_API_KEY` raise rate limits
 - `WEB_SEARCH_CONTACT` for API etiquette headers
 - `WEB_SEARCH_ALLOW_PRIVATE_URLS=1` only for explicitly trusted local-network research
+- `WEB_SEARCH_INSECURE_TLS=1` **disables TLS certificate verification entirely** (`ssl.CERT_NONE`, no hostname check) for all HTTP fetches. This is a real MITM exposure -- only ever set it against a fully trusted network (e.g. a controlled test fixture), never for normal research use.
+- Cache sizing: `WEB_SEARCH_MEMORY_CACHE_ENTRIES` (512), `WEB_SEARCH_MEMORY_CACHE_BYTES` (32MB), `WEB_SEARCH_DISK_CACHE_ENTRIES` (20000), `WEB_SEARCH_DISK_CACHE_BYTES` (512MB)
+- Fetch/extraction limits: `WEB_SEARCH_MAX_RESOURCE_BYTES` (25MB, per PDF/page download), `WEB_SEARCH_MAX_PDF_CHARS` (500000), `WEB_SEARCH_MAX_STORED_CONTENT_CHARS` (500000), `WEB_SEARCH_MIN_HOST_INTERVAL` (0.2s pacing between requests to the same host)
+- Discovery/expansion: `WEB_SEARCH_MAX_QUERY_EXPANSIONS` (24), `WEB_SEARCH_LINK_MAX_NODES` (200), `WEB_SEARCH_LINK_MAX_EDGES` (500), `WEB_SEARCH_LINKS_PER_DOMAIN` (20), `WEB_SEARCH_VERTICAL_LINK_MIN_RELEVANCE` (0.35), `WEB_SEARCH_MIN_QUERY_ROUNDS` (2)
+- `WEB_SEARCH_CHROMIUM_EXECUTABLE` overrides Chromium auto-discovery; `WEB_SEARCH_LOAD_HEAVY_ASSETS=1` stops the default blocking of images/media/fonts during browser fetches
 
 The output keeps per-channel status, original ranks, `found_by`, freshness, canonical/final URLs, resource lineage, link graph, filtered-ad reasons, coverage, and partial failures.
