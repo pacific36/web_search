@@ -2383,6 +2383,9 @@ def _smart_search_impl(query: str, limit: int = 15, max_iterations: int = 3,
     ], original_query)
     with _filter_stats_lock:
         filter_snapshot = dict(_filter_stats)
+    # Ad/spam filter counters, NOT a content summary despite the name -- how
+    # many results were dropped and why. For evidence to synthesize from, see
+    # review_packet.top_evidence (or combined_results without --summary).
     result["filtered_summary"] = {
         "total": sum(filter_snapshot.values()),
         "reasons": dict(sorted(filter_snapshot.items())),

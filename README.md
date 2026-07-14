@@ -25,6 +25,36 @@ venv/Scripts/python.exe search.py "your query" --max-iter 3 --summary --review-q
 
 `--limit` is the per-channel target. `--fresh` forces live refresh while retaining stale data only as a failure supplement. `--plan-only` prints query expansion directions without network access. `--summary` emits a compact `review_packet`; repeated `--review-query` values inject caller-selected directions into subsequent all-channel rounds.
 
+## CLI output schema
+
+The CLI prints structured evidence JSON, not prose. There is no `synthesis` /
+`summary` / `answer` field anywhere in the output -- writing a concise,
+readable synthesis for the human is the calling agent's job (see "Report
+evidence" in `SKILL.md`), not something `search.py` generates itself.
+
+With `--summary`, top-level keys are `query`, `detected_vendor`, `alt_queries`,
+`sufficient`, `queries_tried`, `model_review`, `coverage`, `channels`,
+`filtered_summary`, `review_packet`, `resources`, `search_log`. The evidence to
+read and synthesize from is `review_packet.top_evidence` (title/url/snippet/
+relevance/found_by/cache_state for the top-ranked results, `top_k=12` by
+default). `filtered_summary` is easy to mistake for a content summary because
+of its name -- it is actually just ad/spam **filter counters**
+(`{"total": N, "reasons": {...}}`), not a synthesis of the results.
+
+Without `--summary`, the full result also includes `combined_results` (the
+complete deduped/merged set, not just the top 12) plus the per-category rows
+(`official_open_source`, `academic_results`, `community_results`, ...).
+
+Since the JSON can be large, don't `| tail -N` it -- that lands on unrelated
+tail structure (`resources`, `search_log`) rather than the evidence. Redirect
+to a file (`cmd > out.json 2>&1`, stdout redirected before stderr is copied to
+it) and pull fields by key instead:
+
+```bash
+python -c "import json; d=json.load(open('out.json', encoding='utf-8')); \
+[print(f\"- {e['title']}\n  {e['url']}\n  {e['snippet']}\n\") for e in d['review_packet']['top_evidence']]"
+```
+
 ## Cross-language routing
 
 English-indexed sources cannot match a CJK-only query and Chinese community sources rank CJK text far better, so language-affine channels can search a translated variant of the base query:
