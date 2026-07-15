@@ -42,10 +42,11 @@ TOOL = {
     "name": "web_search",
     "description": (
         "Multi-channel web research. Aggregates Google, Bing, Baidu, Zhihu, arXiv, "
-        "Crossref, OpenAlex, GitHub, Hacker News, Stack Overflow, CSDN, V2EX and "
-        "Juejin in one pass, deep-reads the top pages, and returns a merged, "
-        "deduped, freshness-aware result set as JSON. Use for ANY web search or "
-        "online research that needs current, corroborated, multi-source evidence. "
+        "Crossref, OpenAlex, DBLP, PubMed, Wikipedia, GitHub, Hacker News, Stack "
+        "Overflow, CSDN, V2EX and Juejin in one pass, deep-reads the top pages, "
+        "and returns a merged, deduped, freshness-aware result set as JSON. "
+        "Use for ANY web search or online research that needs current, "
+        "corroborated, multi-source evidence. "
         "Start with max_iter=1; only set fresh=true for time-sensitive queries."
     ),
     "inputSchema": {

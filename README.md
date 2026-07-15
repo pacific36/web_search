@@ -6,12 +6,35 @@ Multi-channel web research that aggregates every enabled source instead of treat
 
 - General web: Google, Bing, Baidu (all run for every query round)
 - Community: Zhihu (through Sogou's zhihu vertical), CSDN, Stack Overflow, V2EX, Juejin, Hacker News
-- Academic: arXiv, Crossref, OpenAlex; Semantic Scholar joins when `SEMANTIC_SCHOLAR_API_KEY` is set
+- Academic: arXiv, Crossref, OpenAlex, DBLP (CS bibliography), PubMed (biomedical, via NCBI E-utilities); Semantic Scholar joins when `SEMANTIC_SCHOLAR_API_KEY` is set
+- Reference: Wikipedia (routes to the Chinese wiki automatically for CJK queries)
 - Code: GitHub
 - Reddit joins when `REDDIT_ACCESS_TOKEN` is set (anonymous search endpoints are blocked)
 - Direct discovery: official pages, canonical/next/feed links, PDFs, attachments, and bounded related-link traversal
 
+DBLP, PubMed, and Wikipedia are free, keyless APIs; `WEB_SEARCH_CONTACT` (an email) is optional but recommended for Wikipedia and PubMed -- it identifies this tool as a good-citizen client under their respective robot/rate-limit policies instead of a generic anonymous one. `NCBI_API_KEY` is optional and raises PubMed's rate ceiling the same way `GITHUB_TOKEN`/`OPENALEX_API_KEY` do for their channels.
+
 Each browser engine owns an independent fingerprint/cooldown state. CAPTCHA, verification, 403, or 429 responses cool that engine/profile pair and retry with another profile while every other channel continues normally. Browser channels stay sequential and each one targets a distinct host (Google/Bing/Baidu/Sogou); API channels run concurrently alongside them.
+
+## Stealth and anti-detection (no proxy)
+
+Browser SERP channels are hardened to survive risk-control on a plain residential IP, with no proxy layer. The target failure mode is the *soft challenge* (CAPTCHA / 429 / "unusual traffic" interstitial) that shared consumer IPs actually receive — not the permanent IP ban providers avoid, since a residential IP is shared by many real users. So the aim is resilience and quick recovery, driven by fingerprint + behavior + rate discipline rather than IP rotation.
+
+Every browser context receives, through a single injected init script kept internally consistent with its rotated fingerprint:
+
+- `navigator.webdriver` removed, and Chromium's default `--enable-automation` switch stripped
+- `navigator.languages`/`language` matched to the profile locale, plus a descending-`q` `Accept-Language` header
+- realistic `navigator.plugins`/`mimeTypes` (headless otherwise reports zero), `hardwareConcurrency`, `deviceMemory`, and `window.chrome.runtime`
+- WebGL `UNMASKED_VENDOR`/`RENDERER` spoofed to the profile's GPU, so `--disable-gpu` headless does not leak `SwiftShader`
+- a `permissions.query` patch and subtle, per-context-stable canvas-readback noise against hash-based canvas fingerprinting
+
+On top of that static environment, each channel performs **best-effort behavioral humanization** (jittered dwell times, mouse drift, natural scroll) that is fully guarded — it can never be what kills a channel — and **escalates with each retry**: the existing per-engine fingerprint cooldown doubles as an adaptive ladder, so a profile that just hit a CAPTCHA is retried on a fresh fingerprint with more patient, more human interaction.
+
+**Optional CDP-leak fix (patchright).** Installing [patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright) (`uv add patchright` or `pip install patchright`) transparently upgrades every browser channel: it is a drop-in Playwright fork that closes the CDP `Runtime.enable` leak Cloudflare/DataDome/Akamai fingerprint. The code auto-detects and prefers it, falling back to vanilla Playwright; set `WEB_SEARCH_DISABLE_PATCHRIGHT=1` to force vanilla.
+
+**Deliberately not done: API-channel TLS/JA3 impersonation.** Browser TLS is already Chromium's. For the plain-HTTP API/content path (`urllib`), matching a browser's JA3/JA4 via `curl_cffi` was deferred on purpose: that same path fetches *discovered, untrusted* URLs and relies on `_guarded_urlopen`'s DNS-pinning SSRF protection (rejecting private IPs and redirects to them), which a naive `curl_cffi` swap would silently drop. The open JSON APIs it would cover rarely block on TLS, so the trade-off is not worth it until the impersonated path can keep the same SSRF guard.
+
+**No proxy layer** is intentional: on a shared consumer IP the levers above are the correct and sufficient strategy; a proxy only matters for high-volume same-host concurrency, which this tool does not do.
 
 ## Usage
 
@@ -73,7 +96,7 @@ venv/Scripts/python.exe search.py "SQLite WAL 模式 并发写入 性能" \
   --query-en "SQLite WAL mode concurrent write performance"
 ```
 
-English-indexed channels (Stack Overflow, Hacker News, arXiv, Crossref, OpenAlex, GitHub) then run the `--query-en` text; Chinese community channels (Baidu, Zhihu, CSDN, V2EX, Juejin) run `--query-zh` when supplied. Google/Bing always receive the original query. When no translation is given, English channels fall back to the query's Latin tokens (`SQLite WAL 模式 并发` reaches them as `SQLite WAL`), so mixed queries still get partial reach. The `smart_search()` / `search_all_engines_extended()` APIs accept the same variants via an `alt_queries={"en": ..., "zh": ...}` argument.
+English-indexed channels (Stack Overflow, Hacker News, arXiv, Crossref, OpenAlex, DBLP, PubMed, GitHub) then run the `--query-en` text; Chinese community channels (Baidu, Zhihu, CSDN, V2EX, Juejin) run `--query-zh` when supplied. Google/Bing always receive the original query. Wikipedia has no fixed affinity -- it always receives the base query and picks `en.wikipedia.org` vs `zh.wikipedia.org` itself by detecting CJK characters in that text. When no translation is given, English channels fall back to the query's Latin tokens (`SQLite WAL 模式 并发` reaches them as `SQLite WAL`), so mixed queries still get partial reach. The `smart_search()` / `search_all_engines_extended()` APIs accept the same variants via an `alt_queries={"en": ..., "zh": ...}` argument.
 
 ## Review loop
 
@@ -164,5 +187,6 @@ Useful environment variables:
 - Fetch/extraction limits: `WEB_SEARCH_MAX_RESOURCE_BYTES` (25MB, per PDF/page download), `WEB_SEARCH_MAX_PDF_CHARS` (500000), `WEB_SEARCH_MAX_STORED_CONTENT_CHARS` (500000), `WEB_SEARCH_MIN_HOST_INTERVAL` (0.2s pacing between requests to the same host)
 - Discovery/expansion: `WEB_SEARCH_MAX_QUERY_EXPANSIONS` (24), `WEB_SEARCH_LINK_MAX_NODES` (200), `WEB_SEARCH_LINK_MAX_EDGES` (500), `WEB_SEARCH_LINKS_PER_DOMAIN` (20), `WEB_SEARCH_VERTICAL_LINK_MIN_RELEVANCE` (0.35), `WEB_SEARCH_MIN_QUERY_ROUNDS` (2)
 - `WEB_SEARCH_CHROMIUM_EXECUTABLE` overrides Chromium auto-discovery; `WEB_SEARCH_LOAD_HEAVY_ASSETS=1` stops the default blocking of images/media/fonts during browser fetches
+- `WEB_SEARCH_HEADFUL=1` runs a visible (non-headless) browser for the hardest targets (needs a display); `WEB_SEARCH_DISABLE_PATCHRIGHT=1` forces vanilla Playwright even when patchright is installed (see "Stealth and anti-detection")
 
 The output keeps per-channel status, original ranks, `found_by`, freshness, canonical/final URLs, resource lineage, link graph, filtered-ad reasons, coverage, and partial failures.

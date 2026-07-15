@@ -636,6 +636,185 @@ class AdditionalAcademicChannelRegressionTests(unittest.TestCase):
                 self.assertEqual(([], None), function("no matches", limit=2))
 
 
+class NewFreeChannelRegressionTests(unittest.TestCase):
+    """Wikipedia / DBLP / PubMed: added as free, no-key, high-corroboration channels."""
+
+    @staticmethod
+    def _response(payload: dict) -> mock.MagicMock:
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+        response.read.return_value = json.dumps(payload).encode("utf-8")
+        return response
+
+    def test_wikipedia_valid_json_returns_parsed_tuple(self) -> None:
+        payload = {
+            "query": {
+                "search": [
+                    {
+                        "title": "SQLite",
+                        "snippet": 'relaxed as write-ahead logging (<span class="searchmatch">WAL</span>) enables concurrent reads',
+                        "timestamp": "2026-06-29T18:33:05Z",
+                    }
+                ]
+            }
+        }
+
+        with mock.patch.object(
+            search, "_guarded_urlopen", return_value=self._response(payload)
+        ):
+            returned = search.search_wikipedia("SQLite WAL mode", limit=3)
+
+        self.assertIsInstance(returned, tuple)
+        self.assertEqual(2, len(returned))
+        results, error = returned
+        self.assertIsNone(error)
+        self.assertEqual("SQLite", results[0]["title"])
+        self.assertEqual("https://en.wikipedia.org/wiki/SQLite", results[0]["url"])
+        self.assertEqual("en", results[0]["metadata"]["lang"])
+        self.assertNotIn("<span", results[0]["snippet"])
+
+    def test_wikipedia_routes_cjk_query_to_zh_wiki(self) -> None:
+        payload = {
+            "query": {"search": [{"title": "测试", "snippet": "示例条目", "timestamp": "2026-01-01T00:00:00Z"}]}
+        }
+
+        with mock.patch.object(
+            search, "_guarded_urlopen", return_value=self._response(payload)
+        ):
+            results, error = search.search_wikipedia("中文查询字符串", limit=3)
+
+        self.assertIsNone(error)
+        self.assertEqual("zh", results[0]["metadata"]["lang"])
+        self.assertIn("zh.wikipedia.org", results[0]["url"])
+
+    def test_dblp_valid_json_returns_parsed_tuple(self) -> None:
+        payload = {
+            "result": {
+                "hits": {
+                    "hit": [
+                        {
+                            "info": {
+                                "title": "Attention Is All You Need.",
+                                "venue": "NeurIPS",
+                                "year": "2017",
+                                "type": "Conference and Workshop Papers",
+                                "authors": {
+                                    "author": [{"text": "Ashish Vaswani"}, {"text": "Noam Shazeer"}]
+                                },
+                                "ee": "https://doi.org/10.5555/dblp-test",
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+
+        with mock.patch.object(
+            search, "_guarded_urlopen", return_value=self._response(payload)
+        ):
+            returned = search.search_dblp("attention is all you need", limit=3)
+
+        self.assertIsInstance(returned, tuple)
+        self.assertEqual(2, len(returned))
+        results, error = returned
+        self.assertIsNone(error)
+        self.assertEqual("Attention Is All You Need", results[0]["title"])
+        self.assertEqual("https://doi.org/10.5555/dblp-test", results[0]["url"])
+        self.assertEqual("NeurIPS", results[0]["metadata"]["venue"])
+        self.assertIn("Ashish Vaswani", results[0]["snippet"])
+
+    def test_dblp_handles_single_hit_and_single_author_without_list_wrapper(self) -> None:
+        # DBLP's XML-to-JSON conversion drops the list wrapper when there is
+        # exactly one hit or one author, returning a bare object instead of a
+        # single-item list -- both must be normalized to a list before iterating.
+        payload = {
+            "result": {
+                "hits": {
+                    "hit": {
+                        "info": {
+                            "title": "Solo Paper.",
+                            "authors": {"author": {"text": "Solo Author"}},
+                        }
+                    }
+                }
+            }
+        }
+
+        with mock.patch.object(
+            search, "_guarded_urlopen", return_value=self._response(payload)
+        ):
+            results, error = search.search_dblp("solo paper", limit=3)
+
+        self.assertIsNone(error)
+        self.assertEqual(1, len(results))
+        self.assertEqual("Solo Paper", results[0]["title"])
+        self.assertIn("Solo Author", results[0]["snippet"])
+
+    def test_pubmed_valid_json_returns_parsed_tuple(self) -> None:
+        esearch_payload = {"esearchresult": {"idlist": ["111", "222"]}}
+        esummary_payload = {
+            "result": {
+                "uids": ["111", "222"],
+                "111": {
+                    "uid": "111",
+                    "title": "A PubMed Test Article.",
+                    "authors": [{"name": "Doe J"}, {"name": "Smith A"}],
+                    "fulljournalname": "Journal of Testing",
+                    "pubdate": "2026 Jul",
+                    "articleids": [
+                        {"idtype": "pubmed", "value": "111"},
+                        {"idtype": "doi", "value": "10.1000/pubmed-test"},
+                    ],
+                },
+                "222": {
+                    "uid": "222",
+                    "title": "",
+                    "authors": [],
+                    "articleids": [],
+                },
+            }
+        }
+
+        with mock.patch.object(
+            search, "_guarded_urlopen",
+            side_effect=[self._response(esearch_payload), self._response(esummary_payload)],
+        ):
+            returned = search.search_pubmed("test query", limit=3)
+
+        self.assertIsInstance(returned, tuple)
+        self.assertEqual(2, len(returned))
+        results, error = returned
+        self.assertIsNone(error)
+        self.assertEqual(1, len(results))  # the blank-title "222" doc is skipped
+        self.assertEqual("A PubMed Test Article", results[0]["title"])
+        self.assertEqual("https://pubmed.ncbi.nlm.nih.gov/111/", results[0]["url"])
+        self.assertEqual("10.1000/pubmed-test", results[0]["metadata"]["doi"])
+
+    def test_pubmed_zero_hits_short_circuits_before_esummary(self) -> None:
+        esearch_payload = {"esearchresult": {"idlist": []}}
+
+        with mock.patch.object(
+            search, "_guarded_urlopen", return_value=self._response(esearch_payload)
+        ) as guarded:
+            returned = search.search_pubmed("no matches at all query", limit=3)
+
+        self.assertEqual(([], None), returned)
+        guarded.assert_called_once()  # esummary must never fire when idlist is empty
+
+    def test_valid_empty_payloads_still_return_tuples(self) -> None:
+        cases = (
+            (search.search_wikipedia, {"query": {"search": []}}),
+            (search.search_dblp, {"result": {"hits": {}}}),
+        )
+
+        for function, payload in cases:
+            with self.subTest(channel=function.__name__), mock.patch.object(
+                search, "_guarded_urlopen", return_value=self._response(payload)
+            ):
+                self.assertEqual(([], None), function("no matches", limit=2))
+
+
 class HtmlAdRegressionTests(unittest.TestCase):
     def test_read_more_aria_label_is_not_an_ad(self) -> None:
         html = '<a href="/article" aria-label="Read more">Read more</a>'
@@ -1122,6 +1301,9 @@ class AllChannelOrchestrationRegressionTests(unittest.TestCase):
         "search_arxiv": "arXiv",
         "search_crossref": "Crossref",
         "search_openalex": "OpenAlex",
+        "search_dblp": "DBLP",
+        "search_pubmed": "PubMed",
+        "search_wikipedia": "Wikipedia",
         "search_github": "GitHub",
         "search_hackernews": "HackerNews",
         "search_csdn": "CSDN",
@@ -1927,6 +2109,184 @@ class BrowserFactoryRegressionTests(unittest.TestCase):
         self.assertEqual("**/*", route_pattern)
         self.assertTrue(callable(route_handler))
         context.add_init_script.assert_called_once()
+
+
+class StealthEnhancementRegressionTests(unittest.TestCase):
+    """The no-proxy stealth-hardening surface: comprehensive init script,
+    launch/header realism, guarded humanization, and the patchright resolver."""
+
+    @staticmethod
+    def _mock_playwright():
+        context = mock.MagicMock(name="browser_context")
+        browser = mock.MagicMock(name="browser")
+        browser.version = "145.0.7632.6"
+        browser.new_context.return_value = context
+        chromium = mock.MagicMock(name="chromium")
+        chromium.launch.return_value = browser
+        return types.SimpleNamespace(chromium=chromium), browser, context
+
+    def test_stealth_script_is_single_call_and_covers_key_surfaces(self) -> None:
+        playwright, _browser, context = self._mock_playwright()
+        # engine="general" needs no DNS pin, keeping this test fully offline.
+        with mock.patch.object(Path, "glob", return_value=[]):
+            search._new_browser_with_fingerprint(playwright, fp_idx=0, engine="general")
+
+        context.add_init_script.assert_called_once()
+        script = context.add_init_script.call_args.args[0]
+        for needle in ("navigator", "webdriver", "webglVendor", "hardwareConcurrency",
+                       "plugins", "getImageData", "permissions", "languages"):
+            self.assertIn(needle, script, f"stealth script missing {needle!r}")
+        fp0 = search._FINGERPRINTS[0]
+        # Per-profile values are baked into the one script so the JS-visible
+        # environment stays internally consistent with the spoofed UA/locale.
+        self.assertIn(fp0["webgl_vendor"], script)
+        self.assertIn(fp0["locale"], script)
+
+    def test_launch_hardening_and_header_realism(self) -> None:
+        playwright, browser, _context = self._mock_playwright()
+        with mock.patch.dict(os.environ, {"WEB_SEARCH_HEADFUL": ""}, clear=False), \
+                mock.patch.object(Path, "glob", return_value=[]):
+            search._new_browser_with_fingerprint(playwright, fp_idx=1, engine="general")
+
+        launch_kwargs = playwright.chromium.launch.call_args.kwargs
+        self.assertEqual(["--enable-automation"], launch_kwargs["ignore_default_args"])
+        self.assertTrue(launch_kwargs["headless"])
+        self.assertTrue(any("AutomationControlled" in a for a in launch_kwargs["args"]))
+        self.assertTrue(any(a.startswith("--lang=") for a in launch_kwargs["args"]))
+        headers = browser.new_context.call_args.kwargs["extra_http_headers"]
+        self.assertIn("Accept-Language", headers)
+
+    def test_locale_languages_and_accept_language(self) -> None:
+        self.assertEqual(["zh-CN", "zh", "en"], search._locale_languages("zh-CN"))
+        self.assertEqual(["en-US", "en"], search._locale_languages("en-US"))
+        self.assertEqual(["ja-JP", "ja", "en"], search._locale_languages("ja-JP"))
+        self.assertEqual(
+            "en-US, en;q=0.9",
+            search._context_extra_headers({"locale": "en-US"})["Accept-Language"],
+        )
+
+    def test_humanize_never_raises_on_broken_or_missing_page(self) -> None:
+        class BadPage:
+            class mouse:
+                @staticmethod
+                def move(*_a, **_k):
+                    raise RuntimeError("no live browser")
+
+                @staticmethod
+                def wheel(*_a, **_k):
+                    raise RuntimeError("no live browser")
+
+            def wait_for_timeout(self, *_a, **_k):
+                raise RuntimeError("no live browser")
+
+        # Behavioral simulation must never be what kills a channel.
+        self.assertIsNone(search._humanize_page(BadPage(), search._FINGERPRINTS[0], 0))
+        self.assertIsNone(search._humanize_page(None, None, 3))
+
+    def test_humanize_scales_interaction_with_intensity(self) -> None:
+        def make_page():
+            page = types.SimpleNamespace(moves=0, wheels=0)
+            page.mouse = types.SimpleNamespace(
+                move=lambda *a, **k: setattr(page, "moves", page.moves + 1),
+                wheel=lambda *a, **k: setattr(page, "wheels", page.wheels + 1),
+            )
+            page.wait_for_timeout = lambda *a, **k: None
+            return page
+
+        low, high = make_page(), make_page()
+        search._humanize_page(low, search._FINGERPRINTS[0], 0)
+        search._humanize_page(high, search._FINGERPRINTS[0], 2)
+        self.assertGreater(high.moves, low.moves)
+        self.assertGreater(high.wheels, low.wheels)
+
+    def test_sync_playwright_resolver_prefers_available_then_falls_back(self) -> None:
+        resolved = search._get_sync_playwright()
+        self.assertIsNotNone(resolved)
+        self.assertIn(search._SYNC_PLAYWRIGHT_SOURCE, {"patchright", "playwright"})
+
+        with mock.patch.dict(os.environ, {"WEB_SEARCH_DISABLE_PATCHRIGHT": "1"}, clear=False):
+            self.assertIsNotNone(search._get_sync_playwright())
+            self.assertEqual("playwright", search._SYNC_PLAYWRIGHT_SOURCE)
+
+        # Neither backend importable -> graceful None (channels then report
+        # "Playwright not available" instead of crashing).
+        with mock.patch.dict(sys.modules, {
+            "patchright": None, "patchright.sync_api": None,
+            "playwright": None, "playwright.sync_api": None,
+        }):
+            self.assertIsNone(search._get_sync_playwright())
+
+
+class CaptchaClassifierRegressionTests(unittest.TestCase):
+    """Challenge-type recognition for proportional backoff + honest reporting
+    (never for solving). Classification is base-gated to avoid false positives."""
+
+    class _Page:
+        def __init__(self, body="", title="", url="") -> None:
+            self._body, self._title, self._url = body, title, url
+
+        def inner_text(self, _sel):
+            return self._body
+
+        def text_content(self, _sel):
+            return self._body
+
+        def title(self):
+            return self._title
+
+        @property
+        def url(self):
+            return self._url
+
+    def test_types_are_classified_from_realistic_pages(self) -> None:
+        cases = {
+            "slider": self._Page(body="安全验证 请拖动左侧滑块完成拼图"),
+            "interstitial": self._Page(title="Bing", body="Our systems have detected unusual traffic"),
+            "image-grid": self._Page(body="请完成下方验证 recaptcha select all images with buses"),
+            "click-select": self._Page(body="安全验证 请依次点击下列文字"),
+            "generic": self._Page(body="安全验证 智能验证"),
+        }
+        for expected, page in cases.items():
+            with self.subTest(kind=expected):
+                self.assertEqual(expected, search._captcha_type(page))
+                self.assertTrue(search._is_captcha_page(page))
+                self.assertIn(
+                    search._CAPTCHA_COOLDOWN_BASE.get(expected), range(1, 3601)
+                )
+
+    def test_classification_is_base_gated_against_false_positives(self) -> None:
+        # Common UI phrasing that overlaps type needles must NOT be read as a
+        # challenge unless a genuine captcha signal is also present.
+        for page in (
+            self._Page(body="Click the button below to slide into the next section"),
+            self._Page(body="python asyncio task cancellation best practices"),
+            self._Page(body="rotate the log file and select each entry to review"),
+        ):
+            with self.subTest(body=page._body[:20]):
+                self.assertEqual("", search._captcha_type(page))
+                self.assertFalse(search._is_captcha_page(page))
+
+    def test_url_signal_alone_is_a_generic_challenge(self) -> None:
+        page = self._Page(url="https://www.google.com/sorry/index?continue=x")
+        self.assertEqual("generic", search._captcha_type(page))
+
+    def test_classifier_survives_a_broken_page(self) -> None:
+        class Broken:
+            def inner_text(self, _sel):
+                raise RuntimeError("detached frame")
+
+            def text_content(self, _sel):
+                raise RuntimeError("detached frame")
+
+            def title(self):
+                raise RuntimeError("detached frame")
+
+            @property
+            def url(self):
+                raise RuntimeError("detached frame")
+
+        self.assertEqual("", search._captcha_type(Broken()))
+        self.assertFalse(search._is_captcha_page(Broken()))
 
 
 if __name__ == "__main__":

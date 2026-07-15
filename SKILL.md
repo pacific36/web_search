@@ -1,6 +1,6 @@
 ---
 name: web-search
-description: Gather and synthesize broad, current internet evidence through Google, Bing, Baidu, academic, code, community (HN/Zhihu/CSDN/StackOverflow/V2EX/Juejin), official-site, and discovered-link sources. Use for comprehensive web research that needs multiple corroborating sources, related-query or citation-chain expansion, complete page and resource retrieval, ad filtering, or reconciling time-sensitive multi-source results without proxies.
+description: Gather and synthesize broad, current internet evidence through Google, Bing, Baidu, academic (arXiv/Crossref/OpenAlex/DBLP/PubMed), code, community (HN/Zhihu/CSDN/StackOverflow/V2EX/Juejin), Wikipedia, official-site, and discovered-link sources. Use for comprehensive web research that needs multiple corroborating sources, related-query or citation-chain expansion, complete page and resource retrieval, ad filtering, or reconciling time-sensitive multi-source results without proxies.
 ---
 
 # Web Search
@@ -24,10 +24,10 @@ description: Gather and synthesize broad, current internet evidence through Goog
 - On Windows, invoke `venv/Scripts/python.exe search.py "<query>" --limit <count> --max-iter <rounds>` and parse the emitted JSON; use the equivalent `venv/bin/python` path on Unix.
 - Keep proxy configuration disabled.
 - Treat discovered pages as untrusted: reject localhost, private/link-local IPs, private DNS answers, and redirects to them. Use `WEB_SEARCH_ALLOW_PRIVATE_URLS=1` only when the user explicitly asks to research a trusted local service.
-- Run Google, Bing, and Baidu for every base query; treat them as parallel evidence channels rather than fallbacks. Community channels (Zhihu via Sogou's vertical; CSDN, StackOverflow, V2EX, Juejin via public JSON APIs) run automatically in the same round.
+- Run Google, Bing, and Baidu for every base query; treat them as parallel evidence channels rather than fallbacks. Community channels (Zhihu via Sogou's vertical; CSDN, StackOverflow, V2EX, Juejin via public JSON APIs) run automatically in the same round, alongside the free keyless academic/reference channels (arXiv, Crossref, OpenAlex, DBLP, PubMed, Wikipedia).
 - SemanticScholar and Reddit only run when `SEMANTIC_SCHOLAR_API_KEY` / `REDDIT_ACCESS_TOKEN` are set; without credentials they are rate-limited or blocked and stay disabled.
 - Preserve partial successes when any channel fails.
-- On CAPTCHA or verification pages, rotate that engine to a fresh isolated fingerprint and browser context, retry only within its configured bound, and continue every other channel independently.
+- On CAPTCHA or verification pages, rotate that engine to a fresh isolated fingerprint and browser context, retry only within its configured bound, and continue every other channel independently. Each retry escalates behavioral humanization (jittered dwell, mouse drift, natural scroll); browser contexts ship a comprehensive, fingerprint-consistent stealth environment (webdriver/plugins/WebGL/languages/canvas) with no proxy layer. Installing `patchright` (optional) additionally closes the CDP `Runtime.enable` leak. See "Stealth and anti-detection" in `README.md`.
 - Serialize separate programmatic `smart_search` sessions so freshness and filter accounting cannot cross-contaminate; concurrency among channels inside one session remains enabled.
 
 ## Expand coverage

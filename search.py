@@ -423,13 +423,18 @@ def _fetch_json(url: str, *, headers: Optional[Dict[str, str]] = None,
                            max_retry_delay=max_retry_delay)
     return json.loads(payload.decode("utf-8"))
 
+# Each profile carries the extra values a stealth init script needs to keep the
+# JS-visible environment internally consistent (a spoofed UA whose WebGL renderer
+# still says "SwiftShader", or whose navigator.languages disagrees with the
+# locale, is a louder tell than no spoofing at all). WebGL vendor/renderer are
+# chosen to match each profile's platform.
 _FINGERPRINTS = [
-    {"ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36", "platform": "Win32", "locale": "zh-CN", "tz": "Asia/Shanghai", "vp": {"width": 1920, "height": 1080}},
-    {"ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36", "platform": "Win32", "locale": "en-US", "tz": "America/New_York", "vp": {"width": 1536, "height": 864}},
-    {"ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36", "platform": "Linux x86_64", "locale": "en-GB", "tz": "Europe/London", "vp": {"width": 1440, "height": 900}},
-    {"ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36", "platform": "MacIntel", "locale": "ja-JP", "tz": "Asia/Tokyo", "vp": {"width": 1680, "height": 1050}},
-    {"ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36 Edg/{major}.0.0.0", "platform": "Win32", "locale": "de-DE", "tz": "Europe/Berlin", "vp": {"width": 1366, "height": 768}},
-    {"ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36", "platform": "MacIntel", "locale": "fr-FR", "tz": "Europe/Paris", "vp": {"width": 1280, "height": 800}},
+    {"ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36", "platform": "Win32", "locale": "zh-CN", "tz": "Asia/Shanghai", "vp": {"width": 1920, "height": 1080}, "webgl_vendor": "Google Inc. (Intel)", "webgl_renderer": "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)", "hardware_concurrency": 8, "device_memory": 8},
+    {"ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36", "platform": "Win32", "locale": "en-US", "tz": "America/New_York", "vp": {"width": 1536, "height": 864}, "webgl_vendor": "Google Inc. (NVIDIA)", "webgl_renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)", "hardware_concurrency": 12, "device_memory": 8},
+    {"ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36", "platform": "Linux x86_64", "locale": "en-GB", "tz": "Europe/London", "vp": {"width": 1440, "height": 900}, "webgl_vendor": "Google Inc. (Intel)", "webgl_renderer": "ANGLE (Intel, Mesa Intel(R) UHD Graphics (CML GT2), OpenGL 4.6)", "hardware_concurrency": 8, "device_memory": 8},
+    {"ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36", "platform": "MacIntel", "locale": "ja-JP", "tz": "Asia/Tokyo", "vp": {"width": 1680, "height": 1050}, "webgl_vendor": "Google Inc. (Apple)", "webgl_renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Pro, Unspecified Version)", "hardware_concurrency": 10, "device_memory": 8},
+    {"ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36 Edg/{major}.0.0.0", "platform": "Win32", "locale": "de-DE", "tz": "Europe/Berlin", "vp": {"width": 1366, "height": 768}, "webgl_vendor": "Google Inc. (AMD)", "webgl_renderer": "ANGLE (AMD, AMD Radeon(TM) Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)", "hardware_concurrency": 16, "device_memory": 16},
+    {"ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36", "platform": "MacIntel", "locale": "fr-FR", "tz": "Europe/Paris", "vp": {"width": 1280, "height": 800}, "webgl_vendor": "Google Inc. (Apple)", "webgl_renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)", "hardware_concurrency": 8, "device_memory": 8},
 ]
 
 try:
@@ -504,8 +509,42 @@ def _mark_fingerprint_success(idx, engine: str = "general"):
     except Exception:
         pass
 
-def _is_captcha_page(page) -> bool:
-    """Detect if current page is a CAPTCHA/verification page."""
+_CAPTCHA_BODY_SIGNALS = [
+    "安全验证", "人机验证", "请完成下方验证", "拖动左侧滑块",
+    "captcha", "verify you are human", "unusual traffic",
+    "robot check", "prove you're not a robot", "recaptcha",
+    "please verify", "滑动验证", "点击验证", "智能验证",
+    "访问过于频繁", "请求频率过高", "temporarily blocked",
+    # Bing serves challenge pages in the fingerprint's locale.
+    "résoudre le défi", "une dernière étape", "one last step",
+    "löse die aufgabe", "resuelve el desafío", "解決してください",
+    "solve the challenge",
+]
+_CAPTCHA_URL_SIGNALS = ["/sorry/", "captcha", "challenge", "verify"]
+
+# Specific -> generic classifiers. Used ONLY to cool an engine down
+# proportionally (an interactive slider means the engine is fairly sure we are a
+# bot; a soft interstitial is more recoverable) and to report honestly which
+# kind of wall a channel hit. This recognizes challenges to back off politely --
+# it does not, and must not, attempt to solve or bypass any of them.
+_CAPTCHA_TYPE_SIGNALS = [
+    ("slider", ["滑块", "拖动左侧", "拖动滑块", "向右滑", "滑动验证", "slide to", "drag the slider", "swipe"]),
+    ("rotate", ["旋转", "rotate the", "turn the image"]),
+    ("click-select", ["依次点击", "顺序点击", "点选", "点击文字", "click the", "select each", "click in order"]),
+    ("image-grid", ["recaptcha", "hcaptcha", "select all images", "选择所有图", "squares with", "matching images"]),
+    ("interstitial", ["unusual traffic", "one last step", "une dernière étape", "异常流量",
+                      "访问过于频繁", "请求频率过高", "systems have detected", "temporarily blocked"]),
+]
+
+# Cool interactive/hard challenges longer than soft interstitials.
+_CAPTCHA_COOLDOWN_BASE = {
+    "slider": 60, "rotate": 60, "image-grid": 75, "click-select": 60,
+    "interstitial": 30, "generic": 45,
+}
+
+
+def _captcha_page_signals(page) -> Tuple[str, str, str]:
+    """(body, title, url) lowercased, best-effort; empty strings on failure."""
     try:
         try:
             body = page.inner_text("body")
@@ -516,25 +555,29 @@ def _is_captcha_page(page) -> bool:
                 body = page.text_content("body") or ""
             except Exception:
                 body = ""
-        body = body[:5000].lower()
-        title = (page.title() or "").lower()
-        current_url = (page.url or "").lower()
-        captcha_signals = [
-            "安全验证", "人机验证", "请完成下方验证", "拖动左侧滑块",
-            "captcha", "verify you are human", "unusual traffic",
-            "robot check", "prove you're not a robot", "recaptcha",
-            "please verify", "滑动验证", "点击验证", "智能验证",
-            "访问过于频繁", "请求频率过高", "temporarily blocked",
-            # Bing serves challenge pages in the fingerprint's locale.
-            "résoudre le défi", "une dernière étape", "one last step",
-            "löse die aufgabe", "resuelve el desafío", "解決してください",
-            "solve the challenge",
-        ]
-        url_signals = ["/sorry/", "captcha", "challenge", "verify"]
-        return (any(sig in body or sig in title for sig in captcha_signals)
-                or any(sig in current_url for sig in url_signals))
+        return body[:5000].lower(), (page.title() or "").lower(), (page.url or "").lower()
     except Exception:
-        return False
+        return "", "", ""
+
+
+def _captcha_type(page) -> str:
+    """Classify a verification page for backoff/telemetry. Returns '' when the
+    page is not a challenge. Recognition only -- never an attempt to solve."""
+    body, title, url = _captcha_page_signals(page)
+    blob = body + " " + title
+    is_captcha = (any(s in blob for s in _CAPTCHA_BODY_SIGNALS)
+                  or any(s in url for s in _CAPTCHA_URL_SIGNALS))
+    if not is_captcha:
+        return ""
+    for label, needles in _CAPTCHA_TYPE_SIGNALS:
+        if any(n in blob for n in needles):
+            return label
+    return "generic"
+
+
+def _is_captcha_page(page) -> bool:
+    """True when the current page is a CAPTCHA/verification wall."""
+    return bool(_captcha_type(page))
 
 
 def _element_text(element) -> str:
@@ -557,6 +600,217 @@ def _pin_candidates_for_url(url: str) -> Dict[str, Tuple[str, ...]]:
     host = (parsed.hostname or "").casefold()
     addresses = _resolve_allowed_addresses(url)
     return {host: addresses} if host and addresses else {}
+
+
+def _locale_languages(locale: str) -> List[str]:
+    """Turn a profile locale into a plausible navigator.languages list."""
+    locale = (locale or "en-US").replace("_", "-")
+    primary = locale.split("-")[0]
+    langs = [locale, primary] if primary and primary != locale else [locale]
+    if primary != "en" and "en" not in langs:
+        langs.append("en")
+    seen: set = set()
+    out: List[str] = []
+    for lang in langs:
+        if lang and lang not in seen:
+            seen.add(lang)
+            out.append(lang)
+    return out
+
+
+def _context_extra_headers(fp: Dict[str, Any]) -> Dict[str, str]:
+    """Accept-Language header consistent with the profile locale (Playwright's
+    locale drives a single value; a descending-q multi-language list matches a
+    real browser more closely)."""
+    langs = _locale_languages(str(fp.get("locale", "en-US")))
+    parts = [langs[0]]
+    q = 9
+    for lang in langs[1:]:
+        parts.append(f"{lang};q=0.{q}")
+        q = max(1, q - 1)
+    return {"Accept-Language": ", ".join(parts)}
+
+
+# Static body of the stealth init script.  It reads a `cfg` object that
+# _build_stealth_script prepends, so all per-profile values stay consistent and
+# the whole thing is injected through a SINGLE context.add_init_script call.
+# Every patch is individually try/guarded: one failing override must not abort
+# the rest of the script.
+_STEALTH_BODY = r"""
+const def = (obj, prop, getter) => {
+  try { Object.defineProperty(obj, prop, {get: getter, configurable: true}); } catch (e) {}
+};
+try { Object.defineProperty(Navigator.prototype, 'webdriver', {get: () => undefined, configurable: true}); } catch (e) {}
+def(navigator, 'webdriver', () => undefined);
+def(navigator, 'platform', () => cfg.platform);
+def(navigator, 'languages', () => cfg.languages);
+def(navigator, 'language', () => cfg.languages[0]);
+def(navigator, 'hardwareConcurrency', () => cfg.hardwareConcurrency);
+def(navigator, 'deviceMemory', () => cfg.deviceMemory);
+try {
+  if (!window.chrome) { window.chrome = {}; }
+  if (!window.chrome.runtime) { window.chrome.runtime = {}; }
+  if (!window.chrome.app) {
+    window.chrome.app = {isInstalled: false,
+      InstallState: {DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed'},
+      RunningState: {CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running'}};
+  }
+} catch (e) {}
+try {
+  const orig = window.navigator.permissions && window.navigator.permissions.query;
+  if (orig) {
+    window.navigator.permissions.query = (params) => (
+      params && params.name === 'notifications'
+        ? Promise.resolve({state: (typeof Notification !== 'undefined' ? Notification.permission : 'default')})
+        : orig.call(window.navigator.permissions, params)
+    );
+  }
+} catch (e) {}
+try {
+  const mk = (name, desc) => ({name: name, filename: 'internal-pdf-viewer', description: desc, length: 1});
+  const plugins = [
+    mk('PDF Viewer', 'Portable Document Format'),
+    mk('Chrome PDF Viewer', 'Portable Document Format'),
+    mk('Chromium PDF Viewer', 'Portable Document Format'),
+    mk('Microsoft Edge PDF Viewer', 'Portable Document Format'),
+    mk('WebKit built-in PDF', 'Portable Document Format'),
+  ];
+  def(navigator, 'plugins', () => plugins);
+  def(navigator, 'mimeTypes', () => [{type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format'}]);
+} catch (e) {}
+try {
+  const patchGl = (proto) => {
+    if (!proto) return;
+    const gp = proto.getParameter;
+    proto.getParameter = function (p) {
+      if (p === 37445) return cfg.webglVendor;    // UNMASKED_VENDOR_WEBGL
+      if (p === 37446) return cfg.webglRenderer;   // UNMASKED_RENDERER_WEBGL
+      return gp.apply(this, arguments);
+    };
+  };
+  patchGl(window.WebGLRenderingContext && WebGLRenderingContext.prototype);
+  patchGl(window.WebGL2RenderingContext && WebGL2RenderingContext.prototype);
+} catch (e) {}
+try {
+  // Subtle, per-context-stable canvas readback noise defeats hash-based canvas
+  // fingerprinting without visibly altering the page (only the read-out copy is
+  // perturbed, by at most 1/255 on the red channel).
+  const seed = cfg.canvasSeed;
+  const orig = CanvasRenderingContext2D.prototype.getImageData;
+  CanvasRenderingContext2D.prototype.getImageData = function () {
+    const res = orig.apply(this, arguments);
+    try {
+      const d = res.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const n = ((seed + i) % 3) - 1;
+        d[i] = Math.max(0, Math.min(255, d[i] + n));
+      }
+    } catch (e) {}
+    return res;
+  };
+} catch (e) {}
+"""
+
+
+def _build_stealth_script(fp: Dict[str, Any], chromium_major) -> str:
+    """Build the per-profile stealth init script (injected once per context)."""
+    try:
+        major = int(str(chromium_major).split(".")[0])
+    except (TypeError, ValueError):
+        major = 126
+    locale = str(fp.get("locale", "en-US"))
+    cfg = {
+        "platform": fp.get("platform", "Win32"),
+        "languages": _locale_languages(locale),
+        "webglVendor": fp.get("webgl_vendor", "Google Inc. (Intel)"),
+        "webglRenderer": fp.get(
+            "webgl_renderer",
+            "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+        ),
+        "hardwareConcurrency": int(fp.get("hardware_concurrency", 8) or 8),
+        "deviceMemory": int(fp.get("device_memory", 8) or 8),
+        "major": major,
+        "canvasSeed": random.randint(1, 250),
+    }
+    return "(() => {\nconst cfg = " + json.dumps(cfg) + ";\n" + _STEALTH_BODY + "\n})();"
+
+
+def _human_jitter(base_ms: float, intensity: int = 0) -> float:
+    """A positive, right-skewed dwell time (ms). Real dwell times are lognormal-
+    ish, not uniform; intensity stretches them for escalation retries."""
+    scale = 1.0 + 0.6 * max(0, intensity)
+    val = base_ms * scale * (0.6 + random.random() * 0.8)
+    val += random.expovariate(1.0 / (110.0 * scale))
+    return max(30.0, min(9000.0, val))
+
+
+def _humanize_page(page, fp, intensity: int = 0) -> None:
+    """Best-effort human-like interaction (jittered dwell, mouse drift, natural
+    scroll). Fully guarded: behavioral simulation must never be what kills a
+    channel, so every failure is swallowed. Intensity scales with the retry/
+    escalation level, so each successive attempt looks more patiently human."""
+    try:
+        vp = fp.get("vp", {}) if isinstance(fp, dict) else {}
+        w = max(64, int(vp.get("width", 1280)))
+        h = max(64, int(vp.get("height", 800)))
+        x = random.randint(2, w - 2)
+        y = random.randint(2, h - 2)
+        for _ in range(2 + max(0, intensity) * 2):
+            nx = min(w - 1, max(1, x + random.randint(-w // 4, w // 4)))
+            ny = min(h - 1, max(1, y + random.randint(-h // 4, h // 4)))
+            try:
+                page.mouse.move(nx, ny, steps=random.randint(4, 12))
+            except Exception:
+                break
+            x, y = nx, ny
+            try:
+                page.wait_for_timeout(int(_human_jitter(55, intensity)))
+            except Exception:
+                break
+        for _ in range(1 + max(0, intensity)):
+            try:
+                page.mouse.wheel(0, random.randint(220, 720))
+                page.wait_for_timeout(int(_human_jitter(120, intensity)))
+            except Exception:
+                break
+        try:
+            page.wait_for_timeout(int(_human_jitter(140, intensity)))
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+_SYNC_PLAYWRIGHT_SOURCE: Optional[str] = None
+
+
+def _get_sync_playwright():
+    """Return a ``sync_playwright`` factory, preferring patchright when present.
+
+    patchright is a drop-in Playwright fork that closes the CDP ``Runtime.enable``
+    leak most modern anti-bot vendors (Cloudflare/DataDome/Akamai) fingerprint;
+    installing it (``uv add patchright`` / ``pip install patchright``) upgrades
+    every browser channel with zero code change here. Falls back to vanilla
+    Playwright, and to ``None`` if neither import succeeds. Set
+    WEB_SEARCH_DISABLE_PATCHRIGHT=1 to force vanilla Playwright even when
+    patchright is installed."""
+    global _SYNC_PLAYWRIGHT_SOURCE
+    disabled = os.environ.get("WEB_SEARCH_DISABLE_PATCHRIGHT", "").strip().lower() in {
+        "1", "true", "yes", "on"}
+    if not disabled:
+        try:
+            from patchright.sync_api import sync_playwright as _sp
+            _SYNC_PLAYWRIGHT_SOURCE = "patchright"
+            return _sp
+        except Exception:
+            pass
+    try:
+        from playwright.sync_api import sync_playwright as _sp
+        _SYNC_PLAYWRIGHT_SOURCE = "playwright"
+        return _sp
+    except Exception:
+        _SYNC_PLAYWRIGHT_SOURCE = None
+        return None
 
 
 def _new_browser_with_fingerprint(p, fp_idx=None, engine: str = "general",
@@ -582,8 +836,11 @@ def _new_browser_with_fingerprint(p, fp_idx=None, engine: str = "general",
     if engine.casefold() in {"google", "bing", "baidu"} and not normalized_pins:
         raise RuntimeError(f"{engine} host did not resolve to a verified address")
     
+    locale = str(fp.get("locale", "en-US"))
     launch_args = ["--disable-blink-features=AutomationControlled",
-                   "--disable-gpu", "--disable-dev-shm-usage"]
+                   "--disable-gpu", "--disable-dev-shm-usage",
+                   "--no-first-run", "--no-default-browser-check",
+                   f"--lang={locale}"]
     if normalized_pins and not _allow_private_urls():
         rules = []
         for host, address in normalized_pins.items():
@@ -591,9 +848,15 @@ def _new_browser_with_fingerprint(p, fp_idx=None, engine: str = "general",
             rules.append(f"MAP {host} {target}")
         rules.append("EXCLUDE localhost")
         launch_args.append("--host-resolver-rules=" + ",".join(rules))
+    # WEB_SEARCH_HEADFUL=1 runs a visible browser (needs a display) for the very
+    # hardest targets; default stays headless.
+    headful = os.environ.get("WEB_SEARCH_HEADFUL", "").strip().lower() in {"1", "true", "yes", "on"}
     launch_options: Dict[str, Any] = {
-        "headless": True,
+        "headless": not headful,
         "args": launch_args,
+        # Chromium adds "--enable-automation" by default; its presence (infobar,
+        # navigator.webdriver=true, differing defaults) is a loud automation tell.
+        "ignore_default_args": ["--enable-automation"],
     }
     configured_browser = os.environ.get("WEB_SEARCH_CHROMIUM_EXECUTABLE", "").strip()
     if configured_browser:
@@ -615,6 +878,7 @@ def _new_browser_with_fingerprint(p, fp_idx=None, engine: str = "general",
             timezone_id=fp["tz"],
             viewport=fp["vp"],
             color_scheme="light",
+            extra_http_headers=_context_extra_headers(fp),
         )
         load_heavy_assets = os.environ.get("WEB_SEARCH_LOAD_HEAVY_ASSETS") == "1"
         def _route_request(route):
@@ -643,11 +907,7 @@ def _new_browser_with_fingerprint(p, fp_idx=None, engine: str = "general",
                 except Exception:
                     pass
         context.route("**/*", _route_request)
-        platform = json.dumps(fp.get("platform", "Win32"))
-        context.add_init_script(
-            'Object.defineProperty(navigator, "webdriver", {get: () => undefined});'
-            f'Object.defineProperty(navigator, "platform", {{get: () => {platform}}});'
-        )
+        context.add_init_script(_build_stealth_script(fp, chromium_major))
         return browser, context, fp_idx
     except Exception:
         browser.close()
@@ -759,9 +1019,8 @@ def playwright_google_search(query: str, limit: int = 20) -> Tuple[List[Dict], O
     """Google search with CAPTCHA retry and fingerprint rotation."""
     if _skip_browser():
         return [], "Google skipped: WEB_SEARCH_SKIP_BROWSER set (browser channels disabled)"
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
+    sync_playwright = _get_sync_playwright()
+    if sync_playwright is None:
         return [], "Playwright not available"
     
     max_attempts = min(3, len(_FINGERPRINTS))
@@ -795,11 +1054,14 @@ def playwright_google_search(query: str, limit: int = 20) -> Tuple[List[Dict], O
                     _cooldown_fingerprint(used_fp, "google")
                     continue
 
-                if _is_captcha_page(page):
-                    last_error = "Google CAPTCHA detected"
-                    _cooldown_fingerprint(used_fp, "google")
+                cap_kind = _captcha_type(page)
+                if cap_kind:
+                    last_error = f"Google CAPTCHA detected [{cap_kind}]"
+                    _cooldown_fingerprint(used_fp, "google",
+                                          base_seconds=_CAPTCHA_COOLDOWN_BASE.get(cap_kind, 45))
                     continue
 
+                _humanize_page(page, _FINGERPRINTS[used_fp], attempt)
                 blocks = page.query_selector_all("div.g, div[data-hveid]")
                 for block in blocks:
                     try:
@@ -842,9 +1104,8 @@ def playwright_bing_search(query: str, limit: int = 20) -> Tuple[List[Dict], Opt
     """Bing search with CAPTCHA retry and fingerprint rotation."""
     if _skip_browser():
         return [], "Bing skipped: WEB_SEARCH_SKIP_BROWSER set (browser channels disabled)"
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
+    sync_playwright = _get_sync_playwright()
+    if sync_playwright is None:
         return [], "Playwright not available"
     last_error = None
     for _attempt in range(min(3, len(_FINGERPRINTS))):
@@ -875,10 +1136,13 @@ def playwright_bing_search(query: str, limit: int = 20) -> Tuple[List[Dict], Opt
                     last_error = f"Bing load failed: {e}"
                     _cooldown_fingerprint(used_fp, "bing")
                     continue
-                if _is_captcha_page(page):
-                    last_error = "Bing CAPTCHA detected"
-                    _cooldown_fingerprint(used_fp, "bing")
+                cap_kind = _captcha_type(page)
+                if cap_kind:
+                    last_error = f"Bing CAPTCHA detected [{cap_kind}]"
+                    _cooldown_fingerprint(used_fp, "bing",
+                                          base_seconds=_CAPTCHA_COOLDOWN_BASE.get(cap_kind, 45))
                     continue
+                _humanize_page(page, _FINGERPRINTS[used_fp], _attempt)
                 for block in page.query_selector_all("li.b_algo"):
                     try:
                         outer = block.evaluate("el => el.outerHTML")
@@ -925,9 +1189,8 @@ def playwright_baidu_search(query: str, limit: int = 20) -> Tuple[List[Dict], Op
     global _baidu_captcha_cooldown_until
     if _time.time() < _baidu_captcha_cooldown_until:
         return [], "Baidu skipped: CAPTCHA cooldown from earlier this session"
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
+    sync_playwright = _get_sync_playwright()
+    if sync_playwright is None:
         return [], "Playwright not available"
     
     max_attempts = min(3, len(_FINGERPRINTS))
@@ -962,11 +1225,14 @@ def playwright_baidu_search(query: str, limit: int = 20) -> Tuple[List[Dict], Op
                     _cooldown_fingerprint(used_fp, "baidu")
                     continue
 
-                if _is_captcha_page(page):
-                    last_error = "Baidu CAPTCHA detected"
-                    _cooldown_fingerprint(used_fp, "baidu")
+                cap_kind = _captcha_type(page)
+                if cap_kind:
+                    last_error = f"Baidu CAPTCHA detected [{cap_kind}]"
+                    _cooldown_fingerprint(used_fp, "baidu",
+                                          base_seconds=_CAPTCHA_COOLDOWN_BASE.get(cap_kind, 45))
                     continue
 
+                _humanize_page(page, _FINGERPRINTS[used_fp], _attempt)
                 # Parse while Playwright and the page are still alive.
                 blocks = page.query_selector_all(
                     "div.c-container, div.result, div[class*='result'], div[class*='container']"
@@ -1409,9 +1675,8 @@ def playwright_extract_content(url: str, max_chars: int = 50000,
     if not host_pins and not _allow_private_urls():
         return stale_text[:max_chars] if stale_text else None
 
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
+    sync_playwright = _get_sync_playwright()
+    if sync_playwright is None:
         return stale_text[:max_chars] if stale_text else None
 
     html = None
@@ -2774,6 +3039,165 @@ def search_arxiv(query: str, limit: int = 10) -> Tuple[List[Dict], Optional[str]
     except Exception as e:
         return [], f"arXiv failed: {e}"
 
+def search_wikipedia(query: str, limit: int = 10) -> Tuple[List[Dict], Optional[str]]:
+    """Search Wikipedia via MediaWiki's public search API, routing CJK queries to the Chinese wiki."""
+    lang = "zh" if _CJK_CHAR_PATTERN.search(query) else "en"
+    params = {
+        "action": "query", "list": "search", "format": "json",
+        "srsearch": query, "srlimit": min(max(1, int(limit)), 50),
+        "srprop": "snippet|timestamp",
+    }
+    url = f"https://{lang}.wikipedia.org/w/api.php?" + urllib.parse.urlencode(params)
+    contact = os.environ.get("WEB_SEARCH_CONTACT", "").strip()
+    try:
+        # Wikimedia's robot policy (https://foundation.wikimedia.org/wiki/Policy:User-Agent_policy)
+        # 403s generic User-Agents under load; identifying a contact keeps this
+        # channel in their good-citizen bucket instead of the throttled default.
+        data = _fetch_json(
+            url, headers={"User-Agent": f"web-search-skill/22.0 (mailto:{contact or 'unset'})",
+                          "Accept": "application/json"},
+            timeout=15, retries=2,
+        )
+    except Exception as exc:
+        return [], f"Wikipedia failed: {exc}"
+    results = []
+    malformed = 0
+    for page in (data.get("query", {}).get("search") or []):
+        try:
+            if not isinstance(page, dict):
+                raise TypeError("page is not an object")
+            title = (page.get("title") or "").strip()
+            if not title:
+                continue
+            snippet = re.sub(r"<[^>]+>", "", page.get("snippet") or "")
+            snippet = re.sub(r"\s+", " ", snippet).strip()
+            page_url = f"https://{lang}.wikipedia.org/wiki/{urllib.parse.quote(title.replace(' ', '_'))}"
+            results.append({
+                "engine": "Wikipedia", "title": title, "url": page_url,
+                "snippet": snippet[:500], "type": "reference", "rank": len(results) + 1,
+                "metadata": {"lang": lang, "last_edited": page.get("timestamp", "")},
+            })
+        except Exception:
+            malformed += 1
+    warning = f"Wikipedia skipped {malformed} malformed records" if malformed else None
+    return results, warning
+
+
+def search_dblp(query: str, limit: int = 10) -> Tuple[List[Dict], Optional[str]]:
+    """Search DBLP's computer science bibliography API."""
+    params = {"q": query, "format": "json", "h": min(max(1, int(limit)), 100)}
+    url = "https://dblp.org/search/publ/api?" + urllib.parse.urlencode(params)
+    try:
+        data = _fetch_json(
+            url, headers={"User-Agent": "web-search-skill/22.0", "Accept": "application/json"},
+            timeout=15, retries=2,
+        )
+    except Exception as exc:
+        return [], f"DBLP failed: {exc}"
+    results = []
+    malformed = 0
+    hits = ((data.get("result") or {}).get("hits") or {}).get("hit") or []
+    if isinstance(hits, dict):  # DBLP omits the list wrapper for a single hit
+        hits = [hits]
+    for hit in hits:
+        try:
+            info = hit.get("info") if isinstance(hit, dict) else None
+            if not isinstance(info, dict):
+                raise TypeError("hit.info is not an object")
+            title = (info.get("title") or "").strip().rstrip(".")
+            if not title:
+                continue
+            authors_field = (info.get("authors") or {}).get("author") or []
+            if isinstance(authors_field, dict):  # same single-vs-list quirk as hits
+                authors_field = [authors_field]
+            authors = [a.get("text", "") for a in authors_field if isinstance(a, dict) and a.get("text")]
+            venue = info.get("venue") or ""
+            year = info.get("year") or ""
+            work_url = info.get("ee") or info.get("url") or ""
+            snippet_parts = []
+            if authors:
+                snippet_parts.append(", ".join(authors[:5]))
+            if venue:
+                snippet_parts.append(str(venue))
+            if year:
+                snippet_parts.append(str(year))
+            results.append({
+                "engine": "DBLP", "title": title, "url": work_url,
+                "snippet": " | ".join(snippet_parts)[:500], "type": "academic",
+                "rank": len(results) + 1,
+                "metadata": {"venue": venue, "year": year, "pub_type": info.get("type", "")},
+            })
+        except Exception:
+            malformed += 1
+    warning = f"DBLP skipped {malformed} malformed records" if malformed else None
+    return results, warning
+
+
+def search_pubmed(query: str, limit: int = 10) -> Tuple[List[Dict], Optional[str]]:
+    """Search PubMed via NCBI E-utilities (esearch for PMIDs, esummary for metadata)."""
+    contact = os.environ.get("WEB_SEARCH_CONTACT", "").strip()
+    api_key = os.environ.get("NCBI_API_KEY", "").strip()
+    limit = min(max(1, int(limit)), 50)
+    common = {"tool": "web-search-skill"}
+    if contact and "@" in contact:
+        common["email"] = contact
+    if api_key:
+        common["api_key"] = api_key
+    headers = {"User-Agent": "web-search-skill/22.0", "Accept": "application/json"}
+    search_params = {"db": "pubmed", "term": query, "retmode": "json", "retmax": limit, **common}
+    search_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?" + urllib.parse.urlencode(search_params)
+    try:
+        search_data = _fetch_json(search_url, headers=headers, timeout=15, retries=2)
+    except Exception as exc:
+        return [], f"PubMed esearch failed: {exc}"
+    pmids = [pmid for pmid in (search_data.get("esearchresult") or {}).get("idlist") or [] if pmid]
+    if not pmids:
+        return [], None
+    summary_params = {"db": "pubmed", "id": ",".join(pmids), "retmode": "json", **common}
+    summary_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?" + urllib.parse.urlencode(summary_params)
+    try:
+        summary_data = _fetch_json(summary_url, headers=headers, timeout=15, retries=2)
+    except Exception as exc:
+        return [], f"PubMed esummary failed: {exc}"
+    results = []
+    malformed = 0
+    summary_result = summary_data.get("result") or {}
+    for uid in summary_result.get("uids") or []:
+        try:
+            doc = summary_result.get(uid)
+            if not isinstance(doc, dict):
+                raise TypeError("docsum is not an object")
+            title = (doc.get("title") or "").strip().rstrip(".")
+            if not title:
+                continue
+            authors = [a.get("name", "") for a in (doc.get("authors") or []) if isinstance(a, dict) and a.get("name")]
+            journal = doc.get("fulljournalname") or doc.get("source") or ""
+            pubdate = doc.get("pubdate") or ""
+            doi = next(
+                (aid.get("value", "") for aid in (doc.get("articleids") or [])
+                 if isinstance(aid, dict) and aid.get("idtype") == "doi"),
+                "",
+            )
+            snippet_parts = []
+            if authors:
+                snippet_parts.append(", ".join(authors[:5]))
+            if journal:
+                snippet_parts.append(str(journal))
+            if pubdate:
+                snippet_parts.append(str(pubdate))
+            results.append({
+                "engine": "PubMed", "title": title,
+                "url": f"https://pubmed.ncbi.nlm.nih.gov/{uid}/",
+                "snippet": " | ".join(snippet_parts)[:500], "type": "academic",
+                "rank": len(results) + 1,
+                "metadata": {"doi": doi, "pubdate": pubdate, "journal": journal},
+            })
+        except Exception:
+            malformed += 1
+    warning = f"PubMed skipped {malformed} malformed records" if malformed else None
+    return results, warning
+
+
 def search_github(query: str, limit: int = 10) -> Tuple[List[Dict], Optional[str]]:
     """Search GitHub API for repositories."""
     url = f"https://api.github.com/search/repositories?q={urllib.parse.quote(query)}&sort=stars&order=desc&per_page={limit}"
@@ -2945,9 +3369,8 @@ def search_zhihu(query: str, limit: int = 10) -> Tuple[List[Dict], Optional[str]
     global _zhihu_captcha_cooldown_until
     if _time.time() < _zhihu_captcha_cooldown_until:
         return [], "Zhihu (Sogou) skipped: CAPTCHA cooldown from earlier this session"
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
+    sync_playwright = _get_sync_playwright()
+    if sync_playwright is None:
         return [], "Playwright not available"
     host_pins = _pin_candidates_for_url("https://www.sogou.com/")
     if not host_pins and not _allow_private_urls():
@@ -2985,10 +3408,14 @@ def search_zhihu(query: str, limit: int = 10) -> Tuple[List[Dict], Optional[str]
                     last_error = f"Zhihu (Sogou) load failed: {e}"
                     _cooldown_fingerprint(used_fp, "sogou")
                     continue
-                if "antispider" in (page.url or "").lower() or _is_captcha_page(page):
-                    last_error = "Zhihu (Sogou) CAPTCHA detected"
-                    _cooldown_fingerprint(used_fp, "sogou")
+                cap_kind = _captcha_type(page)
+                if "antispider" in (page.url or "").lower() or cap_kind:
+                    kind = cap_kind or "antispider"
+                    last_error = f"Zhihu (Sogou) CAPTCHA detected [{kind}]"
+                    _cooldown_fingerprint(used_fp, "sogou",
+                                          base_seconds=_CAPTCHA_COOLDOWN_BASE.get(cap_kind or "generic", 45))
                     continue
+                _humanize_page(page, _FINGERPRINTS[used_fp], _attempt)
                 for block in page.query_selector_all(".results .vrwrap, .results .rb"):
                     try:
                         title_el = block.query_selector("h3 a")
@@ -3258,7 +3685,10 @@ _CHANNEL_LANGUAGE_AFFINITY = {
     "Baidu": "zh", "Zhihu": "zh", "CSDN": "zh", "V2EX": "zh", "Juejin": "zh",
     "StackOverflow": "en", "HackerNews": "en", "Reddit": "en",
     "SemanticScholar": "en", "arXiv": "en", "Crossref": "en", "OpenAlex": "en",
-    "GitHub": "en",
+    "GitHub": "en", "DBLP": "en", "PubMed": "en",
+    # Wikipedia has no fixed affinity: it self-detects CJK in whatever query it
+    # receives and picks the wiki-language subdomain internally (like Google/Bing,
+    # it always receives the base query rather than a swapped translation).
 }
 
 _CJK_CHAR_PATTERN = re.compile(r"[㐀-䶿一-鿿]")
@@ -3306,6 +3736,9 @@ def search_all_engines_extended(query: str, limit: int = 15, vendor: Optional[st
         ("arXiv", search_arxiv, min(limit, 20), "serp"),
         ("Crossref", search_crossref, min(limit, 20), "serp"),
         ("OpenAlex", search_openalex, min(limit, 20), "serp"),
+        ("DBLP", search_dblp, min(limit, 20), "serp"),
+        ("PubMed", search_pubmed, min(limit, 20), "serp"),
+        ("Wikipedia", search_wikipedia, min(limit, 10), "serp"),
         ("GitHub", search_github, min(limit, 20), "serp"),
         ("HackerNews", search_hackernews, min(limit, 20), "community"),
         ("CSDN", search_csdn, min(limit, 10), "community"),
