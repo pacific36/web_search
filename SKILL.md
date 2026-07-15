@@ -48,6 +48,7 @@ description: Gather and synthesize broad, current internet evidence through Goog
 - Accumulate previous review queries on the next invocation so the shared result is rebuilt from cached earlier rounds plus new live directions. Do not use `--fresh` merely to repeat unchanged work.
 - Use two to four model judgment passes, with no more than eight model-directed queries total. Stop early when the answer is current, source-diverse, deeply read, and corroborated, or when a pass adds no material domain, resource, contradiction, or fact.
 - Let the model choose search directions and evaluate evidence quality only. Never let it fabricate retrieval results, silently drop an inconvenient channel, or overwrite source provenance.
+- Check `review_packet.fallback_hint` on every round: while `sufficient` is false and fewer than 2 rounds have run, it nudges toward `--review-query` rounds first; once still insufficient after that, it explicitly says to stop iterating within this tool and supplement with **other web-search, browsing, or domain-specific tools available in this environment** (a different search integration, direct browser navigation, an API-specific tool, etc.) rather than reporting the query as unanswerable or presenting thin coverage as comprehensive.
 
 ## Cache with freshness
 
@@ -71,3 +72,4 @@ description: Gather and synthesize broad, current internet evidence through Goog
 - Return a concise synthesis, a merged result set, per-channel coverage and errors, discovered resources, and unresolved gaps.
 - Mark cached or stale evidence explicitly and retain publication, discovery, and validation times when available.
 - Cite final source URLs and distinguish supported facts from inference.
+- If coverage stayed insufficient even after review passes and other tools were used to supplement, say so explicitly instead of presenting thin evidence as if it were comprehensive.

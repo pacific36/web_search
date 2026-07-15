@@ -34,12 +34,21 @@ evidence" in `SKILL.md`), not something `search.py` generates itself.
 
 With `--summary`, top-level keys are `query`, `detected_vendor`, `alt_queries`,
 `sufficient`, `queries_tried`, `model_review`, `coverage`, `channels`,
-`filtered_summary`, `review_packet`, `resources`, `search_log`. The evidence to
-read and synthesize from is `review_packet.top_evidence` (title/url/snippet/
-relevance/found_by/cache_state for the top-ranked results, `top_k=12` by
-default). `filtered_summary` is easy to mistake for a content summary because
-of its name -- it is actually just ad/spam **filter counters**
+`filtered_summary`, `cache`, `review_packet`, `resources`, `search_log`. The
+evidence to read and synthesize from is `review_packet.top_evidence`
+(title/url/snippet/relevance/found_by/cache_state for the top-ranked results,
+`top_k=12` by default). `filtered_summary` is easy to mistake for a content
+summary because of its name -- it is actually just ad/spam **filter counters**
 (`{"total": N, "reasons": {...}}`), not a synthesis of the results.
+`cache.degraded`/`cache.last_error` flag whether SQLite lock contention forced
+this run onto an in-memory (non-persistent) cache.
+
+When `review_packet.sufficient` is false, check `review_packet.fallback_hint`:
+for the first review round it nudges toward `--review-query` rounds (this
+tool's own remediation path); once still insufficient after that, it
+explicitly says to stop iterating within this tool and supplement with other
+web-search/browsing/domain-specific tools available in the calling
+environment, rather than reporting the query as unanswerable.
 
 Without `--summary`, the full result also includes `combined_results` (the
 complete deduped/merged set, not just the top 12) plus the per-category rows

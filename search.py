@@ -2490,6 +2490,24 @@ def build_model_review_packet(result: Dict[str, Any], top_k: int = 12) -> Dict[s
     if not result.get("sufficient"):
         gaps.append("deterministic_sufficiency_not_met")
 
+    rounds_tried = len(result.get("queries_tried") or [])
+    fallback_hint = None
+    if not result.get("sufficient"):
+        if rounds_tried < 2:
+            fallback_hint = (
+                "Coverage does not meet the sufficiency bar yet (see gaps). Try 1-3 "
+                "targeted --review-query rounds first (see suggested_queries / "
+                "decision_contract) before falling back to other tools."
+            )
+        else:
+            fallback_hint = (
+                f"Coverage still does not meet the sufficiency bar after {rounds_tried} "
+                "query round(s) (see gaps). If more review-query rounds are unlikely to "
+                "close these gaps, supplement with other web-search, browsing, or "
+                "domain-specific tools available in this environment instead of "
+                "reporting the query as unanswerable."
+            )
+
     evidence = []
     for row in combined[:max(1, int(top_k))]:
         metadata = row.get("metadata") or {}
@@ -2516,6 +2534,7 @@ def build_model_review_packet(result: Dict[str, Any], top_k: int = 12) -> Dict[s
         "failed_channels": sorted(failed_channels),
         "warning_channels": sorted(warning_channels),
         "gaps": gaps,
+        "fallback_hint": fallback_hint,
         "top_evidence": evidence,
         "suggested_queries": (result.get("query_plan") or [])[:8],
         "decision_contract": {
