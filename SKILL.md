@@ -1,3 +1,9 @@
+Exit code: 0
+Wall time: 2.9 seconds
+Output:
+Exit code: 0
+Wall time: 3.8 seconds
+Output:
 ---
 name: web-search
 description: Gather and synthesize broad, current internet evidence through Google, Bing, Baidu, academic, code, community (HN/Zhihu/CSDN/StackOverflow/V2EX/Juejin), official-site, and discovered-link sources. Use for comprehensive web research that needs multiple corroborating sources, related-query or citation-chain expansion, complete page and resource retrieval, ad filtering, or reconciling time-sensitive multi-source results without proxies.
@@ -16,6 +22,10 @@ description: Gather and synthesize broad, current internet evidence through Goog
 - SemanticScholar and Reddit only run when `SEMANTIC_SCHOLAR_API_KEY` / `REDDIT_ACCESS_TOKEN` are set; without credentials they are rate-limited or blocked and stay disabled.
 - Preserve partial successes when any channel fails.
 - On CAPTCHA or verification pages, rotate that engine to a fresh isolated fingerprint and browser context, retry only within its configured bound, and continue every other channel independently.
+- When a channel returns CAPTCHA or verification failure in two consecutive rounds, do NOT degrade or skip it. Instead, rotate to the next available fingerprint from the pool (the script maintains `_FINGERPRINTS` with at least 4 profiles per engine). Each rotation must use a completely fresh browser context — no cookies, no localStorage, no prior session state. Only mark a channel as truly unavailable after exhausting all fingerprints in the pool for that engine.
+- Fingerprint rotation is the primary defense against rate-limiting and CAPTCHA. The agent should track which (engine, fingerprint_index) pairs have been tried for the current query round and avoid reusing a failed pair within the same round. Across rounds, previously-cooled-down fingerprints become eligible again once their cooldown expires.
+- If all fingerprints for a given engine are in cooldown simultaneously, wait for the shortest remaining cooldown rather than abandoning the channel. Report the wait time to the user as an intermediate update.
+- When a CAPTCHA or verification page is detected, the script automatically saves a full-page screenshot to `captcha_screenshots/{engine}_{timestamp}.png` relative to the skill directory. These screenshots are for debugging and forensic analysis of blocking patterns. Always mention the screenshot path in your commentary when a CAPTCHA is encountered so the user can inspect the actual blocking page.
 - Serialize separate programmatic `smart_search` sessions so freshness and filter accounting cannot cross-contaminate; concurrency among channels inside one session remains enabled.
 
 ## Expand coverage
@@ -59,3 +69,5 @@ description: Gather and synthesize broad, current internet evidence through Goog
 - Return a concise synthesis, a merged result set, per-channel coverage and errors, discovered resources, and unresolved gaps.
 - Mark cached or stale evidence explicitly and retain publication, discovery, and validation times when available.
 - Cite final source URLs and distinguish supported facts from inference.
+
+

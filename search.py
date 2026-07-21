@@ -537,6 +537,22 @@ def _is_captcha_page(page) -> bool:
         return False
 
 
+def _save_captcha_screenshot(page, engine: str):
+    """Save a screenshot of the current CAPTCHA/verification page."""
+    try:
+        from datetime import datetime
+        screenshot_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "captcha_screenshots")
+        os.makedirs(screenshot_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{engine}_{timestamp}.png"
+        filepath = os.path.join(screenshot_dir, filename)
+        page.screenshot(path=filepath, full_page=True)
+        print(f"[CAPTCHA] Saved screenshot: {filepath}", flush=True)
+        return filepath
+    except Exception as e:
+        print(f"[CAPTCHA] Failed to save screenshot: {e}", flush=True)
+        return None
+
 def _element_text(element) -> str:
     """Read visible text, falling back to DOM text when CSS marks it hidden."""
     if not element:
@@ -788,6 +804,7 @@ def playwright_google_search(query: str, limit: int = 20) -> Tuple[List[Dict], O
                 if _is_captcha_page(page):
                     last_error = "Google CAPTCHA detected"
                     _cooldown_fingerprint(used_fp, "google")
+                    _save_captcha_screenshot(page, "google")
                     continue
 
                 blocks = page.query_selector_all("div.g, div[data-hveid]")
@@ -866,6 +883,7 @@ def playwright_bing_search(query: str, limit: int = 20) -> Tuple[List[Dict], Opt
                 if _is_captcha_page(page):
                     last_error = "Bing CAPTCHA detected"
                     _cooldown_fingerprint(used_fp, "bing")
+                    _save_captcha_screenshot(page, "bing")
                     continue
                 for block in page.query_selector_all("li.b_algo"):
                     try:
@@ -951,6 +969,7 @@ def playwright_baidu_search(query: str, limit: int = 20) -> Tuple[List[Dict], Op
                 if _is_captcha_page(page):
                     last_error = "Baidu CAPTCHA detected"
                     _cooldown_fingerprint(used_fp, "baidu")
+                    _save_captcha_screenshot(page, "baidu")
                     continue
 
                 # Parse while Playwright and the page are still alive.
@@ -3143,7 +3162,8 @@ def search_all_engines_extended(query: str, limit: int = 15, vendor: Optional[st
     """
     # Every configured channel participates in every query round.  Vertical
     # channels may return zero relevant rows, but are never treated as fallbacks.
-    _browser_channel_count = 4  # Google, Bing, Baidu, Zhihu (via Sogou)
+    _skip_browser = os.environ.get("WEB_SEARCH_SKIP_BROWSER", "").strip() == "1"
+    _browser_channel_count = 0 if _skip_browser else 4  # Google, Bing, Baidu, Zhihu (via Sogou)
     providers = [
         ("Google", playwright_google_search, limit, "serp"),
         ("Bing", playwright_bing_search, limit, "serp"),
